@@ -70,7 +70,17 @@ async def main():
         )
         return
 
-    # 2. Reload AI Multi-Key Pool
+    # 2. Cloud State Sync: If database is brand new (e.g. freshly deployed Render container), restore from Saved Messages!
+    active_keys = await db.get_active_keys("groq")
+    if not active_keys:
+        logger.info("Local database has 0 keys. Checking Telegram Saved Messages for cloud backup...")
+        from core.cloud_sync import restore_database_from_cloud
+        restored = await restore_database_from_cloud(manager.user_client)
+        if restored:
+            await db.close()
+            await db.connect()
+
+    # 3. Reload AI Multi-Key Pool
     key_count = await ai_pool.reload_keys()
     logger.info("AI Pool initialized with %d active keys.", key_count)
 
@@ -114,6 +124,15 @@ async def main():
         sweeper_task.cancel()
         if web_server:
             await web_server.stop()
+
+        # Automatic state snapshot to Saved Messages on container restart/shutdown
+        if manager.user_client and manager.user_client.is_connected():
+            try:
+                from core.cloud_sync import backup_database_to_cloud
+                await backup_database_to_cloud(manager.user_client)
+            except Exception:
+                pass
+
         await manager.stop()
         logger.info("Ultroid-Neo stopped cleanly.")
 
