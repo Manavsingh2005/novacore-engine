@@ -308,6 +308,38 @@ HTML_DASHBOARD = """<!DOCTYPE html>
             color: #fff;
             border-color: var(--red);
         }
+        .btn-call {
+            background-color: #238636;
+            color: #ffffff;
+            border-color: rgba(240, 246, 252, 0.1);
+        }
+        .btn-call:hover {
+            background-color: #2ea043;
+            color: #fff;
+        }
+        .btn-primary {
+            background-color: #1f6feb;
+            color: #ffffff;
+            border-color: rgba(240, 246, 252, 0.1);
+        }
+        .btn-primary:hover {
+            background-color: #388bfd;
+            color: #fff;
+        }
+        .form-input {
+            width: 100%;
+            background: #0d1117;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 8px 10px;
+            color: #c9d1d9;
+            font-size: 0.85rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .form-input:focus {
+            border-color: var(--accent);
+        }
         .file-list {
             margin-top: 14px;
             border: 1px solid var(--border);
@@ -440,6 +472,52 @@ HTML_DASHBOARD = """<!DOCTYPE html>
                 </button>
             </div>
 
+            <!-- Twilio GSM Voice Calling Section -->
+            <div class="section-header" style="margin-top: 24px;">
+                <h2 class="section-title">📞 Twilio GSM Phone Calling Alarm</h2>
+                <span id="twilioStatusBadge" class="badge" style="background: {twilio_badge_bg}; color: {twilio_badge_color};">{twilio_badge_text}</span>
+            </div>
+
+            <div style="background: #11161d; border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                    <div>
+                        <label style="font-size: 0.78rem; color: #8b949e; display: block; margin-bottom: 4px;">Account SID (starts with AC...)</label>
+                        <input id="twSid" type="text" class="form-input" placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" value="{twilio_account_sid}" />
+                    </div>
+                    <div>
+                        <label style="font-size: 0.78rem; color: #8b949e; display: block; margin-bottom: 4px;">Auth Token</label>
+                        <input id="twToken" type="password" class="form-input" placeholder="Auth Token (leave empty to keep unchanged)" />
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px;">
+                    <div>
+                        <label style="font-size: 0.78rem; color: #8b949e; display: block; margin-bottom: 4px;">Twilio Outbound Number</label>
+                        <input id="twFrom" type="text" class="form-input" placeholder="+1205xxxxxxx" value="{twilio_from_number}" />
+                    </div>
+                    <div>
+                        <label style="font-size: 0.78rem; color: #8b949e; display: block; margin-bottom: 4px;">Your Verified Mobile Phone</label>
+                        <input id="twTo" type="text" class="form-input" placeholder="+9198xxxxxxxx" value="{twilio_to_number}" />
+                    </div>
+                </div>
+
+                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                    <label style="font-size: 0.85rem; display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input id="twEnabled" type="checkbox" {twilio_enabled_checked} style="cursor: pointer; width: 16px; height: 16px;" />
+                        <span>Enable Real Phone Calls for Scheduled Reminders</span>
+                    </label>
+
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-primary" onclick="saveTwilioSettings()">
+                            💾 Save Settings
+                        </button>
+                        <button class="btn btn-call" onclick="testTwilioCall()">
+                            📞 Test Phone Call
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <div class="footer">
                 <p>24/7 AWS Control Gateway &nbsp;•&nbsp; <a class="endpoint-link" href="/health">/health</a> &nbsp;•&nbsp; <a class="endpoint-link" href="/stats">/stats</a> &nbsp;•&nbsp; <a class="endpoint-link" href="/api/storage">/api/storage</a></p>
             </div>
@@ -507,6 +585,62 @@ HTML_DASHBOARD = """<!DOCTYPE html>
                 showToast(`Failed to refresh: ${err.message}`, true);
             }
         }
+
+        async function saveTwilioSettings() {
+            const sid = document.getElementById('twSid').value.trim();
+            const token = document.getElementById('twToken').value.trim();
+            const fromNum = document.getElementById('twFrom').value.trim();
+            const toNum = document.getElementById('twTo').value.trim();
+            const enabled = document.getElementById('twEnabled').checked;
+
+            try {
+                showToast('Saving Twilio configuration...');
+                const res = await fetch('/api/twilio/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        account_sid: sid,
+                        auth_token: token,
+                        from_number: fromNum,
+                        to_number: toNum,
+                        enabled: enabled
+                    })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(`✅ ${data.message}`);
+                    const badge = document.getElementById('twilioStatusBadge');
+                    if (data.ready) {
+                        badge.textContent = 'Ready';
+                        badge.style.background = '#238636';
+                        badge.style.color = '#fff';
+                    } else {
+                        badge.textContent = 'Needs Setup';
+                        badge.style.background = '#30363d';
+                        badge.style.color = '#8b949e';
+                    }
+                } else {
+                    showToast(`❌ Error: ${data.message}`, true);
+                }
+            } catch (err) {
+                showToast(`❌ Network error: ${err.message}`, true);
+            }
+        }
+
+        async function testTwilioCall() {
+            try {
+                showToast('📞 Initiating test phone call to your phone...');
+                const res = await fetch('/api/twilio/test-call', { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(`🎉 Call Dispatched to ${data.to}! Status: ${data.status}`);
+                } else {
+                    showToast(`❌ Call Failed: ${data.error || 'Check credentials and verified numbers'}`, true);
+                }
+            } catch (err) {
+                showToast(`❌ Network error: ${err.message}`, true);
+            }
+        }
     </script>
 </body>
 </html>
@@ -528,6 +662,9 @@ class WebHealthServer:
         self.app.router.add_get("/stats", self.stats_handler)
         self.app.router.add_get("/api/storage", self.api_storage_handler)
         self.app.router.add_post("/api/clean-tmp", self.api_clean_tmp_handler)
+        self.app.router.add_get("/api/twilio", self.api_twilio_get_handler)
+        self.app.router.add_post("/api/twilio/config", self.api_twilio_config_handler)
+        self.app.router.add_post("/api/twilio/test-call", self.api_twilio_test_call_handler)
 
     async def dashboard_handler(self, request: web.Request) -> web.Response:
         uptime_str = format_uptime(self.start_time)
@@ -536,6 +673,14 @@ class WebHealthServer:
 
         disk = get_disk_info()
         temp_files, temp_bytes = inspect_temp_storage()
+
+        from helpers.twilio_caller import get_twilio_credentials, is_twilio_ready
+        tw_creds = await get_twilio_credentials()
+        tw_ready, tw_reason = await is_twilio_ready()
+        tw_badge_bg = "#238636" if tw_ready else "#30363d"
+        tw_badge_color = "#ffffff" if tw_ready else "#8b949e"
+        tw_badge_text = "Ready" if tw_ready else "Needs Setup"
+        tw_sid_display = tw_creds["account_sid"][:6] + "••••" + tw_creds["account_sid"][-4:] if len(tw_creds["account_sid"]) > 10 else tw_creds["account_sid"]
 
         if not temp_files:
             file_items_html = '<div class="empty-state">✨ All Clean! Zero dangling temporary files on disk.</div>'
@@ -565,6 +710,13 @@ class WebHealthServer:
             .replace("{temp_count}", str(len(temp_files)))
             .replace("{temp_total}", format_bytes(temp_bytes))
             .replace("{file_items_html}", file_items_html)
+            .replace("{twilio_badge_bg}", tw_badge_bg)
+            .replace("{twilio_badge_color}", tw_badge_color)
+            .replace("{twilio_badge_text}", tw_badge_text)
+            .replace("{twilio_account_sid}", tw_sid_display)
+            .replace("{twilio_from_number}", tw_creds["from_number"])
+            .replace("{twilio_to_number}", tw_creds["to_number"])
+            .replace("{twilio_enabled_checked}", "checked" if tw_creds["enabled"] else "")
         )
         return web.Response(text=html, content_type="text/html")
 
@@ -582,6 +734,61 @@ class WebHealthServer:
             "timestamp": time.time(),
         }
         return web.json_response(data)
+
+    async def api_twilio_get_handler(self, request: web.Request) -> web.Response:
+        from helpers.twilio_caller import get_twilio_credentials, is_twilio_ready
+        creds = await get_twilio_credentials()
+        ready, msg = await is_twilio_ready()
+        return web.json_response({
+            "ready": ready,
+            "message": msg,
+            "account_sid_masked": creds["account_sid"][:6] + "••••" + creds["account_sid"][-4:] if len(creds["account_sid"]) > 10 else "",
+            "from_number": creds["from_number"],
+            "to_number": creds["to_number"],
+            "enabled": creds["enabled"],
+            "voice": creds["voice"],
+        })
+
+    async def api_twilio_config_handler(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+            from core.database import db
+            from helpers.twilio_caller import is_twilio_ready
+
+            if "account_sid" in data and data["account_sid"].strip():
+                if not data["account_sid"].strip().startswith("AC••••"):
+                    await db.set_setting("twilio_account_sid", data["account_sid"].strip())
+            if "auth_token" in data and data["auth_token"].strip():
+                await db.set_setting("twilio_auth_token", data["auth_token"].strip())
+            if "from_number" in data:
+                await db.set_setting("twilio_from_number", data["from_number"].strip())
+            if "to_number" in data:
+                await db.set_setting("twilio_to_number", data["to_number"].strip())
+            if "enabled" in data:
+                await db.set_setting("twilio_call_enabled", "true" if data["enabled"] else "false")
+            if "voice" in data and data["voice"].strip():
+                await db.set_setting("twilio_voice", data["voice"].strip())
+
+            ready, status_msg = await is_twilio_ready()
+            return web.json_response({
+                "success": True,
+                "ready": ready,
+                "message": f"Twilio settings saved! Status: {status_msg}",
+            })
+        except Exception as e:
+            return web.json_response({"success": False, "message": str(e)}, status=400)
+
+    async def api_twilio_test_call_handler(self, request: web.Request) -> web.Response:
+        try:
+            from helpers.twilio_caller import is_twilio_ready, place_phone_call
+            ready, reason = await is_twilio_ready()
+            if not ready:
+                return web.json_response({"success": False, "error": f"Twilio not ready: {reason}"}, status=400)
+
+            res = await place_phone_call("This is a live test of your NovaCore autonomous phone calling alarm system. Everything is functioning normally!")
+            return web.json_response(res)
+        except Exception as e:
+            return web.json_response({"success": False, "error": str(e)}, status=500)
 
     async def api_clean_tmp_handler(self, request: web.Request) -> web.Response:
         """Purges all dangling temp files and returns status."""

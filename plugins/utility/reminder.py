@@ -179,12 +179,16 @@ async def remind_cmd(event: SafeMessageWrapper, query: str = ""):
     countdown_parts.append(f"{s}s")
     countdown = " ".join(countdown_parts)
 
+    from helpers.twilio_caller import is_twilio_ready
+    twilio_ready, _ = await is_twilio_ready()
+    alarm_type_str = "Neural Voice Note & Real Phone Call (Twilio) 📞" if twilio_ready else "Neural Voice Note & Audible Ring"
+
     await event.edit(
         f"⏰ **Voice Call Alarm Scheduled (ID: `#{rem_id}`)**\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📢 **Task:** `{task_text}`\n"
         f"⏱️ **Rings at:** `{formatted_target}` *(in {countdown})*\n"
-        f"🎙️ **Alarm Type:** `Neural Voice Note & Audible Ring`\n"
+        f"🎙️ **Alarm Type:** `{alarm_type_str}`\n"
         f"🌐 **Timezone:** `{user_tz.key}`\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"> 💡 *NovaCore will ring and deliver your voice reminder when time arrives!*"
@@ -345,3 +349,194 @@ async def execute_voice_alarm(client, reminder: dict):
                 os.remove(tmp_path)
             except OSError:
                 pass
+
+    # 4. Outbound Twilio Real GSM Voice Call
+    try:
+        from helpers.twilio_caller import is_twilio_ready, place_phone_call
+        is_ready, _ = await is_twilio_ready()
+        if is_ready:
+            call_res = await place_phone_call(task_text)
+            if call_res.get("success"):
+                to_masked = call_res.get("to", "")
+                if len(to_masked) > 7:
+                    to_masked = to_masked[:3] + "****" + to_masked[-4:]
+                await client.send_message(
+                    chat_id,
+                    f"📞 **Real Phone Call Dispatched:** Calling `{to_masked}`!\n"
+                    f"• **Call SID:** `{call_res.get('call_sid')}`\n"
+                    f"• **Status:** `{call_res.get('status')}`\n"
+                    f"> 🔔 *Answer your mobile phone to hear your reminder!*"
+                )
+            else:
+                await client.send_message(
+                    chat_id,
+                    f"⚠️ **Twilio Phone Call Notice:** {call_res.get('error')}"
+                )
+    except Exception as ex:
+        logger.error("Error executing Twilio phone call: %s", ex)
+
+
+@client_cmd(
+    pattern=r"twilio",
+    description="Manage Twilio Voice Calling for Phone Alarms (.twilio [status|on|off|config])",
+    module="utility",
+)
+async def twilio_cmd(event: SafeMessageWrapper, query: str = ""):
+    from helpers.twilio_caller import get_twilio_credentials, is_twilio_ready
+
+    parts = query.strip().split()
+    subcmd = parts[0].lower() if parts else "status"
+
+    if subcmd in ("status", "info"):
+        creds = await get_twilio_credentials()
+        ready, status_msg = await is_twilio_ready()
+
+        def mask(s: str) -> str:
+            if not s:
+                return "❌ *Not Configured*"
+            if len(s) <= 8:
+                return "••••••••"
+            return f"`{s[:4]}••••{s[-4:]}`"
+
+        status_icon = "🟢 **Ready to Call**" if ready else f"🟡 **Needs Setup** ({status_msg})"
+        enabled_str = "✅ **Enabled**" if creds["enabled"] else "⛔ **Disabled**"
+
+        await event.edit(
+            f"📞 **NovaCore Twilio Voice Calling System**\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"• **Engine Status:** {status_icon}\n"
+            f"• **Calling Active:** {enabled_str}\n"
+            f"• **Account SID:** {mask(creds['account_sid'])}\n"
+            f"• **Auth Token:** {mask(creds['auth_token'])}\n"
+            f"• **Twilio Number:** `{creds['from_number'] or 'Not Set'}`\n"
+            f"• **Your Verified Mobile:** `{creds['to_number'] or 'Not Set'}`\n"
+            f"• **Polly AI Voice:** `{creds['voice']}`\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📖 **Commands:**\n"
+            f"• `.testcall` — Place an instant test call to your phone!\n"
+            f"• `.setphone <+country_code_number>` — Set your phone number\n"
+            f"• `.twilio on` / `.twilio off` — Toggle calling on alarms\n"
+            f"• `.twilio config <SID> <TOKEN> <TWILIO_NUM> <MY_NUM>` — Save keys\n"
+            f"> 💡 *Or configure securely at http://54.206.81.79:7860/*"
+        )
+        return
+
+    elif subcmd == "on":
+        await db.set_setting("twilio_call_enabled", "true")
+        await event.edit("✅ **Twilio phone calls are now ENABLED for all scheduled reminders!** 📞")
+        return
+
+    elif subcmd == "off":
+        await db.set_setting("twilio_call_enabled", "false")
+        await event.edit("⛔ **Twilio phone calls DISABLED.** (Reminders will use Telegram audio notes only).")
+        return
+
+    elif subcmd == "config":
+        # Format: .twilio config <sid> <token> <twilio_from> <user_to>
+        if len(parts) < 5:
+            await event.edit(
+                "❌ **Usage:** `.twilio config <ACCOUNT_SID> <AUTH_TOKEN> <TWILIO_NUMBER> <YOUR_PHONE>`\n\n"
+                "*(Example: `.twilio config ACxxxxxx 9f8xxxxxx +1205xxxxxxx +9198xxxxxxxx`)*\n"
+                "🔒 *The message will be automatically deleted immediately for your security.*"
+            )
+            return
+
+        sid = parts[1].strip()
+        token = parts[2].strip()
+        from_num = parts[3].strip()
+        to_num = parts[4].strip()
+
+        await db.set_setting("twilio_account_sid", sid)
+        await db.set_setting("twilio_auth_token", token)
+        await db.set_setting("twilio_from_number", from_num)
+        await db.set_setting("twilio_to_number", to_num)
+        await db.set_setting("twilio_call_enabled", "true")
+
+        # Delete raw command message for security
+        try:
+            await event.delete()
+        except Exception:
+            pass
+
+        await event.respond(
+            "🔒 ✅ **Twilio Voice Calling Successfully Configured!**\n\n"
+            f"• Outbound Caller: `{from_num}`\n"
+            f"• Destination Phone: `{to_num}`\n"
+            f"• Raw credentials stored securely in SQLite database.\n\n"
+            f"👉 Send `.testcall` to place an immediate test call to your mobile!"
+        )
+        return
+
+    else:
+        await event.edit("❌ Unknown subcommand. Use `.twilio status`, `.twilio config`, `.twilio on`, or `.twilio off`.")
+
+
+@client_cmd(
+    pattern=r"setphone",
+    description="Set your verified destination phone number for Twilio alarms (.setphone <number>)",
+    module="utility",
+)
+async def setphone_cmd(event: SafeMessageWrapper, query: str = ""):
+    num = query.strip()
+    if not num:
+        curr = await db.get_setting("twilio_to_number", "Not Set")
+        await event.edit(f"📞 **Current Destination Phone:** `{curr}`\n\nTo update: `.setphone +919876543210`")
+        return
+
+    if not num.startswith("+"):
+        await event.edit("❌ Phone number must be in E.164 international format starting with `+` (e.g. `+919876543210`).")
+        return
+
+    await db.set_setting("twilio_to_number", num)
+    await event.edit(f"✅ **Destination Phone Number Updated to `{num}`!**\nUse `.testcall` to verify.")
+
+
+@client_cmd(
+    pattern=r"testcall",
+    description="Trigger an instant test phone call to verify Twilio calling (.testcall [message])",
+    module="utility",
+)
+async def testcall_cmd(event: SafeMessageWrapper, query: str = ""):
+    from helpers.twilio_caller import is_twilio_ready, place_phone_call
+
+    ready, reason = await is_twilio_ready()
+    if not ready:
+        await event.edit(
+            f"❌ **Twilio Calling Not Ready:** {reason}\n\n"
+            f"Configure your Twilio details using:\n"
+            f"`.twilio config <ACCOUNT_SID> <AUTH_TOKEN> <TWILIO_NUMBER> <YOUR_PHONE>`\n"
+            f"or via the web dashboard at http://54.206.81.79:7860/"
+        )
+        return
+
+    test_msg = query.strip() or "This is a live test of your NovaCore voice calling alarm system. Everything is functioning normally!"
+
+    await event.edit("📞 **Initiating real GSM phone call via Twilio...**")
+    res = await place_phone_call(test_msg)
+
+    if res.get("success"):
+        await event.edit(
+            f"🎉 📞 **Phone Call Dispatched Successfully!**\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"• **Calling:** `{res.get('to')}`\n"
+            f"• **Call SID:** `{res.get('call_sid')}`\n"
+            f"• **Status:** `{res.get('status')}`\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔔 **Your phone should be ringing right now!**\n"
+            f"> *Pick up to hear Amazon Polly speak your test message.*"
+        )
+    else:
+        err = res.get("error", "Unknown error")
+        code = res.get("code", "")
+        hint = ""
+        if code == 21608:
+            hint = "\n💡 *Trial Account Note: You must verify your destination phone number in the Twilio Console (Phone Numbers -> Manage -> Verified Caller IDs).*"
+        elif code == 21211:
+            hint = "\n💡 *Invalid phone number format. Ensure number is in international E.164 format (e.g. +919876543210).*"
+
+        await event.edit(
+            f"❌ **Failed to Place Phone Call**\n"
+            f"• **Error:** `{err}` (Code: `{code}`)\n"
+            f"{hint}"
+        )
+
