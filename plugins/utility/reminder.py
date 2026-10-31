@@ -303,7 +303,7 @@ async def execute_voice_alarm(client, reminder: dict):
     logger.info("Executing scheduled voice alarm #%d: '%s'", rem_id, task_text)
 
     # 1. Synthesize urgent voice call reminder using Edge-TTS
-    voice_script = f"Attention Trade! This is your scheduled alarm reminder for: {task_text}. Please check this task right now."
+    voice_script = f"Attention Manav! This is your scheduled alarm reminder for: {task_text}. Please check this task right now."
     selected_voice = await db.get_setting("tts_voice", "en-US-ChristopherNeural")
 
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
