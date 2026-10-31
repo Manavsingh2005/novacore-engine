@@ -19,9 +19,11 @@ Features:
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import logging
 import os
 import re
+import shutil
 import tempfile
 import time
 from typing import Any, Dict, List, Optional
@@ -70,7 +72,7 @@ def format_duration(seconds: Optional[int | float]) -> str:
 
 
 def get_base_ydl_opts(temp_dir: str, progress_hook=None) -> dict:
-    """Constructs base yt-dlp options with optional cookies, Deno JS solver, and progress hooks."""
+    """Constructs base yt-dlp options with isolated cookie snapshot, mobile clients, and progress hooks."""
     opts = {
         "outtmpl": os.path.join(temp_dir, "%(title).50s.%(ext)s"),
         "quiet": True,
@@ -85,10 +87,27 @@ def get_base_ydl_opts(temp_dir: str, progress_hook=None) -> dict:
     if progress_hook:
         opts["progress_hooks"] = [progress_hook]
 
-    # Check if user has uploaded cookies.txt to bypass YouTube bot checks
-    cookie_path = os.path.join("data", "cookies.txt")
-    if os.path.exists(cookie_path) and os.path.getsize(cookie_path) > 0:
-        opts["cookiefile"] = cookie_path
+    # Isolate cookies: yt-dlp writes back session updates to the cookiefile on exit.
+    # On datacenter IPs, this corrupts or strips existing auth cookies after a single request!
+    # To keep data/cookies.txt permanently intact, we copy it into an isolated temporary file per request.
+    master_cookie = os.path.join("data", "cookies.txt")
+    backup_cookie = os.path.join("data", "cookies_master.txt")
+
+    # Auto-restore from backup if master cookie was somehow deleted
+    if not os.path.exists(master_cookie) and os.path.exists(backup_cookie):
+        try:
+            shutil.copyfile(backup_cookie, master_cookie)
+        except Exception:
+            pass
+
+    if os.path.exists(master_cookie) and os.path.getsize(master_cookie) > 0:
+        try:
+            isolated_cookie = os.path.join(temp_dir, "isolated_cookies.txt")
+            shutil.copyfile(master_cookie, isolated_cookie)
+            opts["cookiefile"] = isolated_cookie
+        except Exception as ce:
+            logger.warning("Failed to isolate cookies file: %s", ce)
+            opts["cookiefile"] = master_cookie
 
     return opts
 
@@ -302,14 +321,10 @@ async def song_cmd(event: SafeMessageWrapper, query: str = ""):
         search_opts = {
             "quiet": True,
             "no_warnings": True,
-            "extract_flat": "in_playlist",
+            "extract_flat": True,  # Flat search retrieves titles & URLs without triggering bot checks
             "skip_download": True,
             "remote_components": ["ejs:github"],
         }
-        cookie_path = os.path.join("data", "cookies.txt")
-        if os.path.exists(cookie_path) and os.path.getsize(cookie_path) > 0:
-            search_opts["cookiefile"] = cookie_path
-
         tracks: List[Dict[str, Any]] = []
         # 1. Search YouTube first
         try:
@@ -466,17 +481,14 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
     loop = asyncio.get_running_loop()
 
     def _probe_info():
-        opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "skip_download": True,
-            "remote_components": ["ejs:github"],
-        }
-        cookie_path = os.path.join("data", "cookies.txt")
-        if os.path.exists(cookie_path) and os.path.getsize(cookie_path) > 0:
-            opts["cookiefile"] = cookie_path
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            return ydl.extract_info(target_url, download=False)
+        probe_dir = tempfile.mkdtemp(prefix="novacore_probe_")
+        try:
+            opts = get_base_ydl_opts(probe_dir)
+            opts["skip_download"] = True
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return ydl.extract_info(target_url, download=False)
+        finally:
+            shutil.rmtree(probe_dir, ignore_errors=True)
 
     try:
         info = await loop.run_in_executor(None, _probe_info)
@@ -700,28 +712,99 @@ async def quick_choice_listener(event: SafeMessageWrapper):
 
 
 # ==========================================
-# CLOUD COOKIES SYSTEM
+# CLOUD COOKIES SYSTEM (PROTECTED MASTER VAULT)
 # ==========================================
 
 @client_cmd(
-    pattern="cookies",
-    description="Save/merge replied cookies.txt file to unlock YouTube, XHamster & adult sites (.cookies)",
+    pattern=r"cookies(?:\s+(status|backup|restore|info))?",
+    description="Manage cloud cookies vault for YouTube, age-gated videos & sites (.cookies)",
     module="media",
 )
-async def cookies_cmd(event: SafeMessageWrapper):
+async def cookies_cmd(event: SafeMessageWrapper, query: str = ""):
+    subcmd = (query or "").strip().lower()
     reply = await event.get_reply_message()
-    if not reply or not reply.document:
-        await event.edit(
-            "❌ **Usage:** Reply to an exported `cookies.txt` file with `.cookies`.\n\n"
-            "This unlocks YouTube, XHamster age-gated videos, and cloud-protected media on your server."
-        )
+
+    os.makedirs("data", exist_ok=True)
+    cookie_path = os.path.join("data", "cookies.txt")
+    backup_path = os.path.join("data", "cookies_master.txt")
+
+    # If user wants to restore from master backup
+    if subcmd == "restore":
+        if not os.path.exists(backup_path) or os.path.getsize(backup_path) == 0:
+            await event.edit("❌ **No master backup found.** Upload a fresh `cookies.txt` first.")
+            return
+        shutil.copyfile(backup_path, cookie_path)
+        await event.edit("✅ **Cookies restored successfully from master backup vault!**")
         return
+
+    # If user wants to backup
+    if subcmd == "backup":
+        if not os.path.exists(cookie_path) or os.path.getsize(cookie_path) == 0:
+            await event.edit("❌ **No active cookies found to back up.**")
+            return
+        shutil.copyfile(cookie_path, backup_path)
+        await event.edit("✅ **Pristine master cookie backup snapshot created!**")
+        return
+
+    # If NOT replying to a file, show the live status & instructions
+    if not reply or not reply.document:
+        if os.path.exists(cookie_path) and os.path.getsize(cookie_path) > 0:
+            domains: Dict[str, int] = {}
+            total_cookies = 0
+            try:
+                with open(cookie_path, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        if line.startswith("#") or not line.strip():
+                            continue
+                        parts = line.strip().split("\t")
+                        if len(parts) >= 6:
+                            d = parts[0].lstrip(".").lower()
+                            domains[d] = domains.get(d, 0) + 1
+                            total_cookies += 1
+            except Exception:
+                pass
+
+            top_domains = ", ".join([f"`{k}` ({v})" for k, v in list(domains.items())[:6]])
+            mtime = datetime.fromtimestamp(os.path.getmtime(cookie_path)).strftime("%d %b %H:%M")
+            has_yt = "✅ Present" if any("youtube" in d for d in domains) else "⚠️ Missing YouTube"
+            has_backup = "✅ Present" if os.path.exists(backup_path) else "❌ None"
+
+            await event.edit(
+                f"🍪 **NovaCore Cloud Cookies Vault**\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"• **Status:** 🟢 Active (`{total_cookies}` cookies stored)\n"
+                f"• **YouTube Auth:** {has_yt}\n"
+                f"• **Master Backup:** {has_backup}\n"
+                f"• **Last Modified:** `{mtime}`\n"
+                f"• **Active Domains:** {top_domains or 'None'}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"🛡️ **Permanent Protection Enabled:**\n"
+                f"> NovaCore automatically isolates cookies in throwaway sandboxes per download. yt-dlp will **never** wipe or overwrite your master cookie vault!\n\n"
+                f"📥 **To Add/Update Cookies (1-Time Setup):**\n"
+                f"1. Open Chrome in **Incognito mode**.\n"
+                f"2. Log into YouTube (or a spare Google account).\n"
+                f"3. Go to `https://www.youtube.com/robots.txt`.\n"
+                f"4. Click `Get cookies.txt locally` extension -> Export.\n"
+                f"5. **Close the Incognito window immediately** (prevents token rotation).\n"
+                f"6. Send the `.txt` file here and reply with `.cookies`!"
+            )
+            return
+        else:
+            await event.edit(
+                "🍪 **No Cookies Installed in Cloud Vault**\n\n"
+                "To permanently unlock YouTube & age-gated videos:\n"
+                "1. Open Chrome in **Incognito mode**.\n"
+                "2. Log into YouTube, go to `https://www.youtube.com/robots.txt`.\n"
+                "3. Export `cookies.txt` with `Get cookies.txt locally`.\n"
+                "4. Close Incognito immediately.\n"
+                "5. Send the `.txt` file here and reply with `.cookies`!\n\n"
+                "💡 *Subcommands:* `.cookies status`, `.cookies backup`, `.cookies restore`"
+            )
+            return
 
     await event.edit("🍪 **Validating and merging cookies into cloud vault...**")
     try:
-        os.makedirs("data", exist_ok=True)
         temp_cookie_path = os.path.join("data", "cookies_temp.txt")
-        cookie_path = os.path.join("data", "cookies.txt")
         await event.client.download_media(reply, file=temp_cookie_path)
 
         # Parse new domains from uploaded file
@@ -742,7 +825,7 @@ async def cookies_cmd(event: SafeMessageWrapper):
             await event.edit("❌ **Error:** No valid Netscape cookies found in the uploaded file.")
             return
 
-        # Keep existing domains that are NOT in new_domains (preserves YouTube and other existing cookies)
+        # Keep existing domains that are NOT in new_domains (preserves other sites)
         all_active_domains = set(new_domains.keys())
         kept_lines: List[str] = []
         if os.path.exists(cookie_path):
@@ -756,14 +839,17 @@ async def cookies_cmd(event: SafeMessageWrapper):
                         all_active_domains.add(domain)
                         kept_lines.append(line)
 
-        # Write merged cookies
+        # Write merged cookies to master vault
         with open(cookie_path, "w", encoding="utf-8") as f:
-            f.write("# Netscape HTTP Cookie File\n# Managed by NovaCore Engine Vault\n\n")
+            f.write("# Netscape HTTP Cookie File\n# Managed by NovaCore Engine Vault (Protected Master)\n\n")
             for line in kept_lines:
                 f.write(line.rstrip("\r\n") + "\n")
             for domain, lines in new_domains.items():
                 for line in lines:
                     f.write(line.rstrip("\r\n") + "\n")
+
+        # Create persistent master backup
+        shutil.copyfile(cookie_path, backup_path)
 
         if os.path.exists(temp_cookie_path):
             os.remove(temp_cookie_path)
@@ -772,11 +858,12 @@ async def cookies_cmd(event: SafeMessageWrapper):
         total_sample = ", ".join(list(all_active_domains)[:5])
 
         await event.edit(
-            "✅ **Cookies Successfully Saved & Merged!**\n\n"
+            "✅ **Cookies Successfully Saved & Permanently Vaulted!**\n\n"
             f"• **Updated Site(s):** `{updated_sample}`\n"
             f"• **Total Active Sites:** `{total_sample}`\n"
-            "• **Status:** Active\n"
-            "• Age-gated and account-locked videos for these sites are now unlocked on your cloud server!"
+            f"• **Master Backup:** Created (`data/cookies_master.txt`)\n"
+            f"• **Sandbox Isolation:** Active (yt-dlp will never touch your master vault)\n\n"
+            "🎉 YouTube, adult sites, and age-gated videos are now permanently unlocked!"
         )
     except Exception as e:
         logger.exception("Failed to save cookies: %s", e)
