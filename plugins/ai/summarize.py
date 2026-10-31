@@ -70,7 +70,7 @@ async def summarize_cmd(event: SafeMessageWrapper, count_str: str = ""):
     try:
         summary = await ai_pool.chat_completion(messages, max_tokens=1200)
         topic_header = f"in Topic `#{event.topic_id}`" if event.topic_id else ""
-        header = f"📊 **Executive Summary ({len(messages_log)} msgs) {topic_header}:**\n\n"
+        header = f"📊 **Executive Summary ({len(messages_log)} msgs) {topic_header}**\n━━━━━━━━━━━━━━━━━━━━\n"
         full_text = header + summary
 
         if len(full_text) > 4000:

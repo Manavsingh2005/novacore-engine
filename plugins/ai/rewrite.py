@@ -132,7 +132,7 @@ async def explain_cmd(event: SafeMessageWrapper, text_arg: str = ""):
 
     try:
         explanation = await ai_pool.chat_completion(messages, temperature=0.5)
-        header = "💡 **Explanation:**\n\n"
+        header = "💡 **Explanation**\n━━━━━━━━━━━━━━━━━━━━\n"
         full_text = header + explanation
         if len(full_text) > 4000:
             full_text = full_text[:3990] + "...\n*(truncated)*"

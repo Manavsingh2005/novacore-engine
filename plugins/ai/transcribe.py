@@ -100,15 +100,19 @@ async def transcribe_cmd(event: SafeMessageWrapper, mode: str = ""):
             chat = await event.get_chat()
             chat_title = getattr(chat, "title", "") or getattr(chat, "first_name", "Private Chat")
 
+            # Quote text with Telegram blockquote
+            quoted_text = "\n".join(f"> {line}" for line in text.splitlines()) if text else "> _(Empty audio)_"
+
             ghost_card = (
                 f"👻 **Ghost Voice Transcription**\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"👤 **From:** {sender_name}\n"
                 f"💬 **Chat:** `{chat_title}`\n"
                 f"🎙️ **Model:** `{active_whisper}`\n"
-                f"──────────────────────────────\n"
-                f"_{text}_\n"
-                f"──────────────────────────────\n"
-                f"⏳ *Auto-deletes from Saved Messages in 30 minutes.*"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"{quoted_text}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"⏳ *Auto-destructs from Saved Messages in 30 minutes.*"
             )
 
             if len(ghost_card) > 4000:
@@ -130,7 +134,12 @@ async def transcribe_cmd(event: SafeMessageWrapper, mode: str = ""):
             asyncio.create_task(_delete_timer())
 
         else:
-            output = f"{header}\n\n_{text}_"
+            quoted_text = "\n".join(f"> {line}" for line in text.splitlines()) if text else "> _(Empty audio)_"
+            output = (
+                f"{header}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"{quoted_text}"
+            )
             if len(output) > 4000:
                 output = output[:3990] + "...\n*(truncated)*"
             await event.edit(output)

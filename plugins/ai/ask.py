@@ -93,7 +93,7 @@ async def ask_cmd(event: SafeMessageWrapper, query: str = ""):
     try:
         current_model = await ai_pool.get_current_model()
         response_text = await ai_pool.chat_completion(messages)
-        full_output = f"🧠 **AI Response** (`{current_model}`):\n\n{response_text}"
+        full_output = f"🧠 **AI Response** (`{current_model}`)\n━━━━━━━━━━━━━━━━━━━━\n{response_text}"
         if len(full_output) > 4000:
             full_output = full_output[:3990] + "...\n*(truncated)*"
         await event.edit(full_output)
