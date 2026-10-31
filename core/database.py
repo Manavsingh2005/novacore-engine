@@ -494,6 +494,15 @@ class Database:
         await self._conn.commit()
         return cursor.rowcount > 0
 
+    async def clear_all_reminders(self, chat_id: Optional[int] = None) -> int:
+        assert self._conn is not None
+        if chat_id is not None:
+            cursor = await self._conn.execute("DELETE FROM scheduled_reminders WHERE chat_id = ?", (chat_id,))
+        else:
+            cursor = await self._conn.execute("DELETE FROM scheduled_reminders")
+        await self._conn.commit()
+        return cursor.rowcount
+
 
 
     # --- Pending Chat Alerts (Auto-cleanup) ---
