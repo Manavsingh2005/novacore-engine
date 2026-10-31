@@ -4,7 +4,7 @@ Features:
 - Rate-limited group auto-reply (max 1 auto-reply per chat every 5 minutes).
 - Logs mentions and message links to Saved Messages while away.
 - Automatically clears AFK upon sending any outgoing message or via .unafk.
-- Reports total mentions collected during away period.
+- Auto-Cleanup: Automatically deletes the AFK log from Saved Messages AND the AFK auto-reply from the other person's chat once you reply to them!
 """
 
 from __future__ import annotations
@@ -61,14 +61,48 @@ async def unafk_cmd(event: SafeMessageWrapper):
 
 
 async def afk_outgoing_clear_handler(event: events.NewMessage.Event):
-    """Detects when the owner speaks, clearing AFK automatically."""
+    """
+    Detects when the owner speaks in any chat:
+    1. Clears AFK automatically.
+    2. Cleans up any pending AFK mention logs from Saved Messages for this chat!
+    3. Cleans up any AFK auto-reply messages from this chat!
+    4. Auto-approves the contact in PM-Permit if in a private chat.
+    """
     if not event.out:
         return
 
-    # Don't clear immediately when setting AFK or running unafk
+    # Don't trigger on command triggers themselves
     if event.text and (event.text.startswith(".afk") or event.text.startswith(".unafk") or event.text.startswith(".back")):
         return
 
+    # 1. Clean up pending alerts for this chat (Saved Messages log + Remote AFK message)
+    try:
+        chat_id = event.chat_id
+        pending_alerts = await db.get_and_clear_chat_alerts(chat_id)
+        if pending_alerts:
+            saved_ids = [a["saved_msg_id"] for a in pending_alerts if a.get("saved_msg_id")]
+            remote_ids = [a["remote_msg_id"] for a in pending_alerts if a.get("remote_msg_id")]
+
+            if saved_ids:
+                try:
+                    await event.client.delete_messages("me", saved_ids)
+                except Exception as e:
+                    logger.debug("Failed deleting saved mention alerts: %s", e)
+
+            if remote_ids:
+                try:
+                    await event.client.delete_messages(chat_id, remote_ids)
+                except Exception as e:
+                    logger.debug("Failed deleting remote AFK messages: %s", e)
+
+        # 2. Auto-approve in private chat so you never have to type .approve
+        if event.is_private:
+            await db.approve_pm(chat_id)
+
+    except Exception as e:
+        logger.debug("Error in outgoing auto-cleanup: %s", e)
+
+    # 3. Clear AFK status if active
     was_afk, reason, afk_since = await db.clear_afk()
     if was_afk:
         duration = format_uptime(afk_since)
@@ -76,8 +110,8 @@ async def afk_outgoing_clear_handler(event: events.NewMessage.Event):
         notice = f"👋 **Back online!** (Away for `{duration}` | Mentions logged: `{mentions_cnt}`)"
         try:
             msg = await event.reply(notice)
-            # Auto-delete return notification after 5 seconds to keep chat clean
-            await asyncio.sleep(5)
+            # Auto-delete return notification after 3 seconds to keep chat clean
+            await asyncio.sleep(3)
             await msg.delete()
         except Exception:
             pass
@@ -131,8 +165,11 @@ async def afk_incoming_mention_handler(event: events.NewMessage.Event):
         f"*(They will see your message upon return)*"
     )
 
+    sent_reply_id = None
     try:
-        await event.reply(auto_reply)
+        sent_reply = await event.reply(auto_reply)
+        if sent_reply:
+            sent_reply_id = sent_reply.id
     except Exception:
         pass
 
@@ -147,7 +184,22 @@ async def afk_incoming_mention_handler(event: events.NewMessage.Event):
         f"• **Message:** _{event.text[:250] if event.text else 'Attachment'}_\n"
         f"• **Time:** `{duration} into AFK`"
     )
+    saved_msg_id = None
     try:
-        await event.client.send_message("me", alert)
+        saved_msg = await event.client.send_message("me", alert)
+        if saved_msg:
+            saved_msg_id = saved_msg.id
     except Exception:
         pass
+
+    # Track alert for automatic deletion once you reply to them!
+    if saved_msg_id or sent_reply_id:
+        try:
+            await db.add_chat_alert(
+                target_chat_id=chat_id,
+                saved_msg_id=saved_msg_id,
+                remote_msg_id=sent_reply_id,
+                alert_type="afk",
+            )
+        except Exception:
+            pass

@@ -136,6 +136,18 @@ class Database:
                     created_at REAL NOT NULL
                 )
             """)
+
+            # Pending Chat Alerts (Auto-cleanup when user replies)
+            await cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pending_chat_alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    target_chat_id INTEGER NOT NULL,
+                    saved_msg_id INTEGER,
+                    remote_msg_id INTEGER,
+                    alert_type TEXT,
+                    created_at REAL NOT NULL
+                )
+            """)
             await self._conn.commit()
 
     # --- Settings Operations ---
@@ -481,6 +493,45 @@ class Database:
         )
         await self._conn.commit()
         return cursor.rowcount > 0
+
+
+
+    # --- Pending Chat Alerts (Auto-cleanup) ---
+    async def add_chat_alert(
+        self,
+        target_chat_id: int,
+        saved_msg_id: Optional[int] = None,
+        remote_msg_id: Optional[int] = None,
+        alert_type: str = "general",
+    ) -> None:
+        assert self._conn is not None
+        now = time.time()
+        await self._conn.execute(
+            """
+            INSERT INTO pending_chat_alerts (target_chat_id, saved_msg_id, remote_msg_id, alert_type, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (target_chat_id, saved_msg_id, remote_msg_id, alert_type, now),
+        )
+        await self._conn.commit()
+
+    async def get_and_clear_chat_alerts(self, target_chat_id: int) -> List[Dict[str, Any]]:
+        assert self._conn is not None
+        async with self._conn.execute(
+            "SELECT id, target_chat_id, saved_msg_id, remote_msg_id, alert_type FROM pending_chat_alerts WHERE target_chat_id = ?",
+            (target_chat_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            alerts = [dict(r) for r in rows]
+
+        if alerts:
+            ids = [a["id"] for a in alerts]
+            placeholders = ",".join("?" for _ in ids)
+            await self._conn.execute(
+                f"DELETE FROM pending_chat_alerts WHERE id IN ({placeholders})", ids
+            )
+            await self._conn.commit()
+        return alerts
 
 
 # Global database instance

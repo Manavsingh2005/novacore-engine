@@ -113,6 +113,11 @@ async def approve_pm(event: SafeMessageWrapper):
 
     await db.approve_pm(target_id)
     await event.edit(f"✅ User `[{target_id}]` has been **approved** to direct message.")
+    await asyncio.sleep(3)
+    try:
+        await event.delete()
+    except Exception:
+        pass
 
 
 @client_cmd(
@@ -135,6 +140,11 @@ async def disapprove_pm(event: SafeMessageWrapper):
 
     await db.disapprove_pm(target_id)
     await event.edit(f"🔒 Approval for user `[{target_id}]` has been **revoked**.")
+    await asyncio.sleep(3)
+    try:
+        await event.delete()
+    except Exception:
+        pass
 
 
 @client_cmd(
@@ -315,8 +325,19 @@ async def incoming_pm_handler(event: events.NewMessage.Event):
                 f"*(Please avoid sending multiple messages in the meantime)*"
             )
 
+    sent_notice_id = None
     try:
-        await event.reply(reply_text)
+        sent_notice = await event.reply(reply_text)
+        if sent_notice:
+            sent_notice_id = sent_notice.id
+            # Self-destruct greeting after 3 minutes to keep stranger's chat clean
+            async def _auto_delete_greeting():
+                await asyncio.sleep(180)
+                try:
+                    await event.client.delete_messages(user_id, [sent_notice_id])
+                except Exception:
+                    pass
+            asyncio.create_task(_auto_delete_greeting())
     except Exception as e:
         logger.warning("Could not send polite PM notice to %d: %s", user_id, e)
 
@@ -327,7 +348,21 @@ async def incoming_pm_handler(event: events.NewMessage.Event):
         f"• **Message:** _{event.text[:200] if event.text else 'Media Attachment'}_\n"
         f"• *Approve with:* `.approve`"
     )
+    saved_alert_id = None
     try:
-        await event.client.send_message("me", alert)
+        saved_msg = await event.client.send_message("me", alert)
+        if saved_msg:
+            saved_alert_id = saved_msg.id
     except Exception:
         pass
+
+    if saved_alert_id or sent_notice_id:
+        try:
+            await db.add_chat_alert(
+                target_chat_id=user_id,
+                saved_msg_id=saved_alert_id,
+                remote_msg_id=sent_notice_id,
+                alert_type="inbox_guard",
+            )
+        except Exception:
+            pass
