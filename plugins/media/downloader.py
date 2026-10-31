@@ -1,13 +1,14 @@
 """
-NovaCore Plugin: High-Speed Media & Song Downloader (.dl, .yt, .song)
+NovaCore Plugin: High-Speed Media & Song Downloader (.dl, .yt, .song, .cookies)
 Uses yt-dlp to stream videos, audio, and media from YouTube, Twitter/X, Instagram,
-and hundreds of supported websites.
+SoundCloud, and hundreds of supported websites.
 Features:
 - .dl / .yt: Downloads video with optimal resolution (supports Instagram Reels, YouTube, X, etc.).
 - .song <name or url>: Searches and downloads 320kbps MP3 audio with native metadata & player.
 - Anti-Ban 3.5s progress edit throttling with thread-safe loop scheduling.
 - Dynamic 2GB auto-split for Free users / 4GB single uploads for Premium.
 - Auto-sanitizes Telegram markdown formatted URLs [text](url).
+- Cloud cookies support (.cookies) to bypass YouTube datacenter IP challenges.
 - Immediate disk cleanup after upload.
 """
 
@@ -45,6 +46,29 @@ def clean_media_target(text: str) -> str:
         return url.rstrip("]>)\"'.,;")
 
     return text.strip()
+
+
+def get_base_ydl_opts(temp_dir: str, progress_hook=None) -> dict:
+    """Constructs base yt-dlp options with optional cookies and progress hooks."""
+    opts = {
+        "outtmpl": os.path.join(temp_dir, "%(title).50s.%(ext)s"),
+        "quiet": True,
+        "no_warnings": True,
+        "max_filesize": 4000 * 1024 * 1024,  # 4GB limit
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        },
+    }
+
+    if progress_hook:
+        opts["progress_hooks"] = [progress_hook]
+
+    # Check if user has uploaded cookies.txt to bypass YouTube bot checks
+    cookie_path = os.path.join("data", "cookies.txt")
+    if os.path.exists(cookie_path) and os.path.getsize(cookie_path) > 0:
+        opts["cookiefile"] = cookie_path
+
+    return opts
 
 
 @client_cmd(
@@ -90,18 +114,11 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
                 except Exception:
                     pass
 
-    ydl_opts = {
+    ydl_opts = get_base_ydl_opts(temp_dir, ytdl_progress_hook)
+    ydl_opts.update({
         "format": "bestvideo+bestaudio/best[ext=mp4]/best",
-        "outtmpl": os.path.join(temp_dir, "%(title).50s.%(ext)s"),
-        "progress_hooks": [ytdl_progress_hook],
-        "quiet": True,
-        "no_warnings": True,
-        "max_filesize": 4000 * 1024 * 1024,  # 4GB limit
         "merge_output_format": "mp4",
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        },
-    }
+    })
 
     try:
         def _extract():
@@ -161,8 +178,19 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
         )
         await event.delete()
     except Exception as e:
-        logger.exception("Downloader failed: %s", e)
-        await event.edit(f"❌ **Download Failed:** `{e}`")
+        err_msg = str(e)
+        logger.exception("Downloader failed: %s", err_msg)
+        if "confirm you’re not a bot" in err_msg or "Sign in to confirm" in err_msg:
+            await event.edit(
+                "🛡️ **YouTube Datacenter Protection**\n\n"
+                "YouTube blocks requests originating from cloud VPS/AWS datacenter IPs.\n\n"
+                "💡 **How to unlock YouTube:**\n"
+                "1. Export your YouTube cookies using the free browser extension `Get cookies.txt locally`.\n"
+                "2. Send that `cookies.txt` file here and reply to it with `.cookies`!\n\n"
+                "*(Instagram, Twitter/X, TikTok, Reddit, and SoundCloud work without cookies)*"
+            )
+        else:
+            await event.edit(f"❌ **Download Failed:** `{err_msg}`")
     finally:
         for f in os.listdir(temp_dir):
             try:
@@ -193,17 +221,19 @@ async def song_cmd(event: SafeMessageWrapper, query: str = ""):
         await event.edit("❌ **Usage:** `.song <song title or URL>`")
         return
 
-    # If not a direct URL, search YouTube
-    search_query = target if target.startswith(("http://", "https://")) else f"ytsearch1:{target}"
+    # For search queries: search SoundCloud first (pristine 320kbps audio & zero datacenter blocks on AWS)
+    if target.startswith(("http://", "https://")):
+        search_query = target
+    else:
+        search_query = f"scsearch1:{target}"
+
     await event.edit(f"🎵 **Searching and extracting audio for:** `{target}`...")
 
     loop = asyncio.get_running_loop()
     temp_dir = tempfile.mkdtemp(prefix="novacore_song_")
-    ydl_opts = {
+    ydl_opts = get_base_ydl_opts(temp_dir)
+    ydl_opts.update({
         "format": "bestaudio/best",
-        "outtmpl": os.path.join(temp_dir, "%(title).50s.%(ext)s"),
-        "quiet": True,
-        "no_warnings": True,
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
@@ -211,12 +241,18 @@ async def song_cmd(event: SafeMessageWrapper, query: str = ""):
                 "preferredquality": "320",
             }
         ],
-    }
+    })
 
     try:
         def _extract():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                return ydl.extract_info(search_query, download=True)
+                try:
+                    return ydl.extract_info(search_query, download=True)
+                except Exception as inner_e:
+                    # If SoundCloud search fails and it wasn't a URL, fallback to YouTube search
+                    if not target.startswith(("http://", "https://")):
+                        return ydl.extract_info(f"ytsearch1:{target}", download=True)
+                    raise inner_e
 
         info = await loop.run_in_executor(None, _extract)
         downloaded = [
@@ -257,8 +293,19 @@ async def song_cmd(event: SafeMessageWrapper, query: str = ""):
         )
         await event.delete()
     except Exception as e:
-        logger.exception("Song download failed: %s", e)
-        await event.edit(f"❌ **Song Download Failed:** `{e}`")
+        err_msg = str(e)
+        logger.exception("Song download failed: %s", err_msg)
+        if "confirm you’re not a bot" in err_msg or "Sign in to confirm" in err_msg:
+            await event.edit(
+                "🛡️ **YouTube Datacenter Protection**\n\n"
+                "YouTube blocks automated requests from cloud VPS/AWS datacenter IPs.\n\n"
+                "💡 **How to unlock YouTube:**\n"
+                "1. Export your YouTube cookies using `Get cookies.txt locally`.\n"
+                "2. Send that `cookies.txt` file here and reply to it with `.cookies`!\n\n"
+                "*(Tip: Search titles work directly via SoundCloud without cookies)*"
+            )
+        else:
+            await event.edit(f"❌ **Song Download Failed:** `{err_msg}`")
     finally:
         for f in os.listdir(temp_dir):
             try:
@@ -269,3 +316,33 @@ async def song_cmd(event: SafeMessageWrapper, query: str = ""):
             os.rmdir(temp_dir)
         except OSError:
             pass
+
+
+@client_cmd(
+    pattern="cookies",
+    description="Save replied cookies.txt file to unlock YouTube downloads on AWS (.cookies)",
+    module="media",
+)
+async def cookies_cmd(event: SafeMessageWrapper):
+    reply = await event.get_reply_message()
+    if not reply or not reply.document:
+        await event.edit(
+            "❌ **Usage:** Reply to an exported `cookies.txt` file with `.cookies`.\n\n"
+            "This unlocks YouTube video and audio downloads on your AWS cloud server."
+        )
+        return
+
+    await event.edit("🍪 **Saving YouTube cookies to secure storage...**")
+    try:
+        os.makedirs("data", exist_ok=True)
+        cookie_path = os.path.join("data", "cookies.txt")
+        await event.client.download_media(reply, file=cookie_path)
+        await event.edit(
+            "✅ **Cookies Successfully Saved!**\n\n"
+            "• **Location:** `data/cookies.txt`\n"
+            "• **Status:** Active\n"
+            "• YouTube downloads are now unlocked on your AWS server!"
+        )
+    except Exception as e:
+        logger.exception("Failed to save cookies: %s", e)
+        await event.edit(f"❌ Failed to save cookies: `{e}`")
