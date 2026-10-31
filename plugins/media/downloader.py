@@ -7,6 +7,7 @@ Features:
 - .song <name or url>: Searches and downloads 320kbps MP3 audio with native metadata & player.
 - Anti-Ban 3.5s progress edit throttling with thread-safe loop scheduling.
 - Dynamic 2GB auto-split for Free users / 4GB single uploads for Premium.
+- Auto-sanitizes Telegram markdown formatted URLs [text](url).
 - Immediate disk cleanup after upload.
 """
 
@@ -15,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import tempfile
 import time
 from typing import Optional
@@ -27,17 +29,37 @@ from helpers.formatters import format_bytes
 logger = logging.getLogger("novacore.plugin.media.downloader")
 
 
+def clean_media_target(text: str) -> str:
+    """Strips Telegram markdown wrappers, brackets, and quotes from URLs."""
+    if not text:
+        return ""
+    # 1. Check for markdown link [title](url)
+    md_match = re.search(r'\[.*?\]\((https?://[^\s\)]+)\)', text)
+    if md_match:
+        return md_match.group(1).strip()
+
+    # 2. Match raw http/https URL
+    raw_match = re.search(r'(https?://[^\s<>"]+)', text)
+    if raw_match:
+        url = raw_match.group(1).strip()
+        return url.rstrip("]>)\"'.,;")
+
+    return text.strip()
+
+
 @client_cmd(
     pattern=r"dl|yt",
     description="Download media from YouTube, X, Instagram, or direct URLs (.dl <url>)",
     module="media",
 )
 async def download_cmd(event: SafeMessageWrapper, url: str = ""):
-    target_url = url.strip()
-    if not target_url:
+    raw_target = url.strip()
+    if not raw_target:
         reply = await event.get_reply_message()
         if reply and reply.text:
-            target_url = reply.text.strip()
+            raw_target = reply.text.strip()
+
+    target_url = clean_media_target(raw_target)
 
     if not target_url:
         await event.edit("❌ **Usage:** `.dl <url>` or reply to a link.")
@@ -159,11 +181,13 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
     module="media",
 )
 async def song_cmd(event: SafeMessageWrapper, query: str = ""):
-    target = query.strip()
-    if not target:
+    raw_target = query.strip()
+    if not raw_target:
         reply = await event.get_reply_message()
         if reply and reply.text:
-            target = reply.text.strip()
+            raw_target = reply.text.strip()
+
+    target = clean_media_target(raw_target) if raw_target.startswith(("http", "[")) else raw_target
 
     if not target:
         await event.edit("❌ **Usage:** `.song <song title or URL>`")
