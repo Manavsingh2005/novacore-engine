@@ -9,6 +9,7 @@ Features:
 - Dynamic 2GB auto-split for Free users / 4GB single uploads for Premium.
 - Auto-sanitizes Telegram markdown formatted URLs [text](url).
 - Cloud cookies support (.cookies) to bypass YouTube datacenter IP challenges.
+- Dynamic Deno / EJS remote component solver for YouTube JavaScript challenges.
 - Immediate disk cleanup after upload.
 """
 
@@ -49,12 +50,13 @@ def clean_media_target(text: str) -> str:
 
 
 def get_base_ydl_opts(temp_dir: str, progress_hook=None) -> dict:
-    """Constructs base yt-dlp options with optional cookies and progress hooks."""
+    """Constructs base yt-dlp options with optional cookies, Deno JS solver, and progress hooks."""
     opts = {
         "outtmpl": os.path.join(temp_dir, "%(title).50s.%(ext)s"),
         "quiet": True,
         "no_warnings": True,
         "max_filesize": 4000 * 1024 * 1024,  # 4GB limit
+        "remote_components": ["ejs:github"],
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
         },
@@ -116,7 +118,7 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
 
     ydl_opts = get_base_ydl_opts(temp_dir, ytdl_progress_hook)
     ydl_opts.update({
-        "format": "bestvideo+bestaudio/best[ext=mp4]/best",
+        "format": "bestvideo*+bestaudio/best",
         "merge_output_format": "mp4",
     })
 
