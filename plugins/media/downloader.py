@@ -400,7 +400,7 @@ async def song_cmd(event: SafeMessageWrapper, query: str = ""):
 
 @client_cmd(
     pattern=r"dl|yt",
-    description="Download media with quality options (.dl [1080|720|480|360|audio|select] <url>)",
+    description="Download media with quality menu (.dl <url> or .dl [1080|720|480|360|audio|best] <url>)",
     module="media",
 )
 async def download_cmd(event: SafeMessageWrapper, url: str = ""):
@@ -413,13 +413,11 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
     if not raw_args:
         await event.edit(
             "❌ **Usage:** `.dl <url>` or reply to a link.\n\n"
-            "**Quality Options:**\n"
-            "• `.dl 1080 <url>` — 1080p Full HD\n"
-            "• `.dl 720 <url>` — 720p HD (Recommended)\n"
-            "• `.dl 480 <url>` — 480p Standard\n"
-            "• `.dl 360 <url>` — 360p Data Saver\n"
-            "• `.dl audio <url>` — Extract MP3\n"
-            "• `.dl select <url>` — Choose quality from menu"
+            "• `.dl <url>` — Shows interactive quality selection menu\n"
+            "• `.dl 720 <url>` — Direct 720p HD download\n"
+            "• `.dl 1080 <url>` — Direct 1080p Full HD download\n"
+            "• `.dl best <url>` — Direct highest quality download\n"
+            "• `.dl audio <url>` — Extract MP3 directly"
         )
         return
 
@@ -428,7 +426,7 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
         choice = int(raw_args)
         cached = DL_SELECT_CACHE.get(event.chat_id)
         if not cached or (time.time() - cached.get("time", 0)) > 900:
-            await event.edit("❌ **No active quality selector found.** Use `.dl select <url>` first.")
+            await event.edit("❌ **No active quality selector found.** Provide a URL first: `.dl <url>`.")
             return
 
         resolutions = ["1080", "720", "480", "360", "audio"]
@@ -438,13 +436,15 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
         await event.edit(f"⚡ **Downloading in {chosen_res} resolution...**")
         return await _execute_dl(event, target_url, quality=chosen_res)
 
-    # Parse quality tag from arguments
-    parts = raw_args.split(maxsplit=1)
-    quality = "best"
+    # Check if explicit quality is passed (e.g. .dl 720 <url>, .dl 1080 <url>, .dl best <url>, .dl -y <url>)
+    explicit_quality = None
     target_str = raw_args
+    parts = raw_args.split(maxsplit=1)
 
-    if parts[0].lower() in ["1080", "720", "480", "360", "audio", "mp3", "select", "menu"]:
-        quality = parts[0].lower()
+    if parts[0].lower() in ["1080", "720", "480", "360", "audio", "mp3", "best", "-y", "auto"]:
+        explicit_quality = parts[0].lower().lstrip("-")
+        if explicit_quality in ["y", "auto"]:
+            explicit_quality = "best"
         target_str = parts[1] if len(parts) > 1 else ""
 
     target_url = clean_media_target(target_str)
@@ -457,28 +457,60 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
         await event.edit("❌ **Error:** No valid media URL found.")
         return
 
-    # If user asked for interactive selection
-    if quality in ["select", "menu"]:
-        DL_SELECT_CACHE[event.chat_id] = {
-            "prompt_msg_id": event.message.id,
-            "topic_id": event.topic_id,
-            "time": time.time(),
-            "url": target_url,
-        }
-        await event.edit(
-            f"🎬 **Choose Video Quality:**\n"
-            f"🔗 `{target_url}`\n\n"
-            f"1️⃣ **1080p** — Full HD\n"
-            f"2️⃣ **720p** — HD (Fast & High Quality)\n"
-            f"3️⃣ **480p** — Standard Definition\n"
-            f"4️⃣ **360p** — Data Saver\n"
-            f"5️⃣ **Audio Only** — MP3 320kbps\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"👉 Reply with `1` - `5` or send `.dl <number>`!"
-        )
-        return
+    # If explicit quality was specified, download immediately
+    if explicit_quality:
+        return await _execute_dl(event, target_url, quality=explicit_quality)
 
-    await _execute_dl(event, target_url, quality=quality)
+    # Otherwise, default to showing the interactive quality selection menu!
+    await event.edit(f"🔎 **Inspecting media options...**\n`{target_url}`")
+    loop = asyncio.get_running_loop()
+
+    def _probe_info():
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "remote_components": ["ejs:github"],
+        }
+        cookie_path = os.path.join("data", "cookies.txt")
+        if os.path.exists(cookie_path) and os.path.getsize(cookie_path) > 0:
+            opts["cookiefile"] = cookie_path
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            return ydl.extract_info(target_url, download=False)
+
+    try:
+        info = await loop.run_in_executor(None, _probe_info)
+        title = info.get("title", "Media Video") if isinstance(info, dict) else "Media Video"
+        uploader = (info.get("uploader") or info.get("channel") or "Online Video") if isinstance(info, dict) else "Online"
+        dur_secs = info.get("duration", 0) if isinstance(info, dict) else 0
+        dur_str = format_duration(dur_secs) if dur_secs else "N/A"
+    except Exception:
+        title = "Media Video"
+        uploader = "Online Video"
+        dur_str = "N/A"
+
+    DL_SELECT_CACHE[event.chat_id] = {
+        "prompt_msg_id": event.message.id,
+        "topic_id": event.topic_id,
+        "time": time.time(),
+        "url": target_url,
+        "title": title,
+    }
+
+    menu_text = (
+        f"🎬 **Choose Video Quality:**\n"
+        f"• **Title:** `{title[:50]}`\n"
+        f"• **Channel:** `{uploader[:30]}` • ⏱️ `{dur_str}`\n\n"
+        f"1️⃣ **1080p** — Full HD\n"
+        f"2️⃣ **720p** — HD *(Recommended)*\n"
+        f"3️⃣ **480p** — Standard\n"
+        f"4️⃣ **360p** — Data Saver\n"
+        f"5️⃣ **Audio Only** — MP3 320kbps\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👉 **Reply with `1` - `5` or send `.dl <number>`!**\n"
+        f"💡 *Direct download without menu: `.dl 720 <url>` or `.dl best <url>`*"
+    )
+    await event.edit(menu_text)
 
 
 async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str = "best"):
@@ -641,20 +673,14 @@ async def quick_choice_listener(event: SafeMessageWrapper):
     chat_id = event.chat_id
     now = time.time()
 
-    # 1. Check for active song search menu
     song_cached = SONG_SEARCH_CACHE.get(chat_id)
-    if song_cached and (now - song_cached.get("time", 0)) <= 300:  # 5 min active window
-        entries = song_cached.get("entries", [])
-        if 1 <= choice <= len(entries):
-            selected = entries[choice - 1]
-            SONG_SEARCH_CACHE.pop(chat_id, None)
-            await event.edit(f"⚡ **Downloading Track #{choice}:** `{selected['title']}`...")
-            await _download_and_send_song(event, selected["url"], meta_hint=selected)
-            return
-
-    # 2. Check for active video quality selector menu
     dl_cached = DL_SELECT_CACHE.get(chat_id)
-    if dl_cached and (now - dl_cached.get("time", 0)) <= 300:  # 5 min active window
+
+    song_time = song_cached.get("time", 0) if song_cached else 0
+    dl_time = dl_cached.get("time", 0) if dl_cached else 0
+
+    # Whichever menu was active most recently receives the choice
+    if dl_time >= song_time and dl_cached and (now - dl_time) <= 300:
         resolutions = ["1080", "720", "480", "360", "audio"]
         chosen_res = resolutions[choice - 1]
         target_url = dl_cached["url"]
@@ -662,6 +688,15 @@ async def quick_choice_listener(event: SafeMessageWrapper):
         await event.edit(f"⚡ **Downloading in {chosen_res} resolution...**")
         await _execute_dl(event, target_url, quality=chosen_res)
         return
+
+    if song_cached and (now - song_time) <= 300:
+        entries = song_cached.get("entries", [])
+        if 1 <= choice <= len(entries):
+            selected = entries[choice - 1]
+            SONG_SEARCH_CACHE.pop(chat_id, None)
+            await event.edit(f"⚡ **Downloading Track #{choice}:** `{selected['title']}`...")
+            await _download_and_send_song(event, selected["url"], meta_hint=selected)
+            return
 
 
 # ==========================================
