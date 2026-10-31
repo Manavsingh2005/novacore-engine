@@ -6,6 +6,7 @@ Main Application Entry Point.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -122,6 +123,35 @@ async def main():
     if settings.PORT:
         web_server = WebHealthServer(port=settings.PORT, start_time=start_time)
         await web_server.start()
+
+    # 8. Check if reboot was triggered by .update or .restart marker
+    marker_path = os.path.join("data", "restart_marker.json")
+    if os.path.exists(marker_path):
+        try:
+            with open(marker_path, "r", encoding="utf-8") as f:
+                marker_data = json.load(f)
+            os.remove(marker_path)
+            chat_id = marker_data.get("chat_id")
+            msg_id = marker_data.get("msg_id")
+            m_type = marker_data.get("type", "restart")
+            if chat_id and msg_id:
+                if m_type == "update":
+                    msg = (
+                        "🚀 **NovaCore Engine Successfully Updated & Online!**\n\n"
+                        f"• **Active Plugins:** `{loaded_plugins}` modules\n"
+                        f"• **AI Key Pool:** `{key_count}` active keys\n"
+                        "• **Server:** AWS EC2 (24/7 Cloud)\n"
+                        "• **Status:** 100% Operational"
+                    )
+                else:
+                    msg = (
+                        "🔄 **NovaCore Engine Successfully Restarted!**\n\n"
+                        f"• **Active Plugins:** `{loaded_plugins}` modules\n"
+                        "• **Status:** 100% Operational"
+                    )
+                await manager.user_client.edit_message(chat_id, msg_id, msg)
+        except Exception as e:
+            logger.debug("Failed to edit restart marker: %s", e)
 
     logger.info("NovaCore is fully armed and running!")
 

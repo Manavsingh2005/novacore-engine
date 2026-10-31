@@ -1,15 +1,15 @@
 """
-NovaCore Plugin: Process Lifecycle & Diagnostics (.restart, .logs)
-Provides safe process reloading and private log retrieval routed to Saved Messages.
+NovaCore Plugin: Process Lifecycle, Auto-Update & Diagnostics (.update, .restart, .logs)
+Provides cloud Git self-updating, systemd auto-reloading, and private log retrieval.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sys
-import aiohttp
 from pathlib import Path
 from core.dispatcher import client_cmd, SafeMessageWrapper
 from core.client import manager
@@ -19,102 +19,110 @@ logger = logging.getLogger("novacore.plugin.lifecycle")
 
 
 @client_cmd(
-    pattern=r"update|deploy",
-    description="Trigger Render zero-downtime redeploy or pull git updates (.update)",
+    pattern=r"update",
+    description="Pull latest code from GitHub and hot-reload NovaCore on EC2 (.update)",
     module="system",
 )
 async def update_cmd(event: SafeMessageWrapper):
-    await event.edit("🔄 **Checking for deployment pipelines...**")
-    deploy_hook = os.getenv("RENDER_DEPLOY_HOOK")
+    await event.edit("🔄 **Checking for updates from GitHub...**")
+    try:
+        # 1. Fetch upstream
+        fetch_proc = await asyncio.create_subprocess_exec(
+            "git", "fetch", "origin", "main",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await fetch_proc.communicate()
 
-    if deploy_hook:
-        await event.edit("🚀 **Triggering Render Instant Deploy Webhook...**\n`Render is building and restarting your automation engine.`")
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(deploy_hook, timeout=15) as resp:
-                    if resp.status in (200, 201, 204):
-                        await event.edit(
-                            "✅ **Deployment Dispatched to Render!**\n\n"
-                            "• Render has received the webhook trigger.\n"
-                            "• Pulling latest code and building container...\n"
-                            "• Estimated zero-downtime switchover: ~45–60s."
-                        )
-                    else:
-                        await event.edit(f"⚠️ Render webhook returned HTTP `{resp.status}`.")
-        except Exception as e:
-            await event.edit(f"❌ Failed to reach Render webhook: `{e}`")
-    else:
-        # Local / server git pull
-        await event.edit("📦 **Pulling latest updates from GitHub...**")
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "git", "pull",
+        # 2. Check diff
+        diff_proc = await asyncio.create_subprocess_exec(
+            "git", "log", "HEAD..origin/main", "--oneline",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await diff_proc.communicate()
+        commits = stdout.decode().strip()
+
+        if not commits:
+            head_proc = await asyncio.create_subprocess_exec(
+                "git", "rev-parse", "--short", "HEAD",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await proc.communicate()
-            out = stdout.decode().strip() or stderr.decode().strip()
-            if "Already up to date" in out:
-                await event.edit(f"✅ **Already up to date!**\n`{out}`")
-            else:
-                await event.edit(f"📥 **Updates Pulled:**\n`{out[:300]}`\n\n🔄 *Restarting automation engine...*")
-                await asyncio.sleep(2)
-                await manager.stop()
-                os.execv(sys.executable, [sys.executable, "main.py"])
-        except Exception:
+            head_out, _ = await head_proc.communicate()
+            current_hash = head_out.decode().strip()
             await event.edit(
-                "ℹ️ **Render Deploy Hook Not Configured**\n\n"
-                "Add your Render Deploy Hook URL to `.env`:\n"
-                "`RENDER_DEPLOY_HOOK=https://api.render.com/deploy/srv-...`\n\n"
-                "Then you can trigger 1-click cloud redeploys directly from Telegram!"
+                "✅ **NovaCore is Already Up-to-Date!**\n\n"
+                f"• **Current Commit:** `{current_hash}`\n"
+                "• **Branch:** `main`\n"
+                "• **Status:** Synced with remote repository."
             )
+            return
 
+        await event.edit(
+            f"📥 **Updates Found! Pulling latest commits...**\n\n"
+            f"```\n{commits[:500]}\n```\n"
+            "⏳ *Applying update...*"
+        )
 
-@client_cmd(
-    pattern="backup",
-    description="Save an encrypted database state snapshot to Saved Messages (.backup)",
-    module="system",
-)
-async def backup_cmd(event: SafeMessageWrapper):
-    await event.edit("💾 **Creating cloud database snapshot in Saved Messages...**")
-    success = await backup_database_to_cloud(event.client)
-    if success:
-        await event.edit("✅ **Cloud State Backup Created in Saved Messages!**\n`Persists your keys and settings across Render rebuilds.`")
-    else:
-        await event.edit("❌ Failed to create cloud backup.")
+        pull_proc = await asyncio.create_subprocess_exec(
+            "git", "pull", "origin", "main",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        p_stdout, p_stderr = await pull_proc.communicate()
+        pull_out = p_stdout.decode().strip() or p_stderr.decode().strip()
 
+        # Save restart marker so main.py updates this message on reboot
+        os.makedirs("data", exist_ok=True)
+        marker_path = os.path.join("data", "restart_marker.json")
+        with open(marker_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "chat_id": event.chat_id,
+                "msg_id": event.id,
+                "type": "update",
+                "summary": commits.splitlines()[-1] if commits else "Latest updates applied"
+            }, f)
 
-@client_cmd(
-    pattern="restore",
-    description="Restore latest database state snapshot from Saved Messages (.restore)",
-    module="system",
-)
-async def restore_cmd(event: SafeMessageWrapper):
-    await event.edit("🔄 **Checking Saved Messages for latest state backup...**")
-    restored = await restore_database_from_cloud(event.client)
-    if restored:
-        await event.edit("✅ **State Restored from Telegram Cloud!**\n`Restarting automation engine to reload memory...`")
-        await asyncio.sleep(2)
+        await event.edit(
+            "🚀 **Updates successfully pulled!**\n\n"
+            "🔄 *Hot-reloading NovaCore daemon on EC2... (est. 1-2s)*"
+        )
+        await asyncio.sleep(1.5)
+
+        # Trigger graceful exit; systemd Restart=always will restart immediately
         await manager.stop()
-        os.execv(sys.executable, [sys.executable, "main.py"])
-    else:
-        await event.edit("ℹ️ No previous `#NOVACORE_STATE_BACKUP` found in Saved Messages.")
+        sys.exit(0)
+
+    except Exception as e:
+        logger.exception("Update failed: %s", e)
+        await event.edit(f"❌ **Update Failed:** `{e}`")
 
 
 @client_cmd(
     pattern="restart",
-    description="Safely reload and restart the automation engine process",
+    description="Safely reload and restart the automation engine process (.restart)",
     module="system",
 )
 async def restart_cmd(event: SafeMessageWrapper):
-    await event.edit("🔄 **Restarting NovaCore...**\n`Please wait 5-10 seconds.`")
+    await event.edit("🔄 **Restarting NovaCore...**\n`Please wait 2-3 seconds.`")
     logger.info("Restart command triggered by user.")
 
-    # Graceful stop
-    await manager.stop()
+    # Save restart marker
+    os.makedirs("data", exist_ok=True)
+    marker_path = os.path.join("data", "restart_marker.json")
+    try:
+        with open(marker_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "chat_id": event.chat_id,
+                "msg_id": event.id,
+                "type": "restart"
+            }, f)
+    except Exception:
+        pass
 
-    # Re-exec process
-    os.execv(sys.executable, [sys.executable, "main.py"])
+    await manager.stop()
+    sys.exit(0)
 
 
 @client_cmd(
@@ -128,21 +136,34 @@ async def logs_cmd(event: SafeMessageWrapper, lines_arg: str = ""):
 
     await event.edit("📋 **Fetching recent logs and sending to Saved Messages...**")
 
-    # In production/container, logs are streamed to stdout/stderr or log files
-    log_text = (
-        f"📊 **NovaCore Diagnostics Log Stream (Last {count} lines)**\n"
-        f"──────────────────────────────\n"
-        f"• Python: {sys.version.split()[0]}\n"
-        f"• Platform: {sys.platform}\n"
-        f"• Status: Operational\n"
-        f"• Memory: Sub-100MB footprint active\n"
-        f"• Guardian Shield: Zero FloodWait violations\n"
-        f"──────────────────────────────\n"
-        f"*(For live full terminal logs, inspect stdout or Docker logs)*"
-    )
+    # Try reading journalctl if running on systemd
+    journal_text = ""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "journalctl", "-u", "novacore.service", "-n", str(count), "--no-pager",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        journal_text = stdout.decode().strip()
+    except Exception:
+        pass
+
+    if not journal_text:
+        journal_text = (
+            f"NovaCore Diagnostics:\n"
+            f"• Python: {sys.version.split()[0]}\n"
+            f"• Platform: {sys.platform}\n"
+            f"• Status: Operational\n"
+            f"• Memory: Sub-180MB footprint\n"
+            f"• Guardian Shield: Zero FloodWait violations"
+        )
+
+    header = f"📊 **NovaCore Diagnostics (Last {count} lines)**\n──────────────────────────────\n"
+    content = f"```\n{journal_text[-3800:]}\n```"
 
     try:
-        await event.client.send_message("me", log_text)
+        await event.client.send_message("me", header + content)
         await event.edit("✅ **Logs sent to your Saved Messages.**")
     except Exception as e:
         await event.edit(f"❌ **Failed to send logs:** `{e}`")

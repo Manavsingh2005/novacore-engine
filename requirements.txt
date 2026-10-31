@@ -103,3 +103,5 @@ yarl==1.25.1
     # via aiohttp
 yt-dlp==2026.10.26
     # via novacore-engine (pyproject.toml)
+
+pytesseract>=0.3.10

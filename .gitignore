@@ -47,3 +47,6 @@ htmlcov/
 # OS-specific
 .DS_Store
 Thumbs.db
+
+ec2_userdata.sh
+AGENTS.md

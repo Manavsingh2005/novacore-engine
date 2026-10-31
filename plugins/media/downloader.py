@@ -4,7 +4,7 @@ Uses yt-dlp to stream videos, audio, and media from YouTube, Twitter/X, Instagra
 and hundreds of supported websites.
 Features:
 - .dl / .yt: Downloads video with optimal resolution.
-- .song <name or url>: Searches and downloads 320kbps MP3 audio with metadata.
+- .song <name or url>: Searches and downloads 320kbps MP3 audio with native metadata & player.
 - Anti-Ban 3.5s progress edit throttling.
 - Dynamic 2GB auto-split for Free users / 4GB single uploads for Premium.
 - Immediate disk cleanup after upload.
@@ -19,6 +19,7 @@ import tempfile
 import time
 from typing import Optional
 import yt_dlp
+from telethon.tl.types import DocumentAttributeAudio
 
 from core.dispatcher import client_cmd, SafeMessageWrapper
 from core.ratelimiter import guardian
@@ -200,14 +201,26 @@ async def song_cmd(event: SafeMessageWrapper, query: str = ""):
 
         file_path = downloaded[0]
         file_size = os.path.getsize(file_path)
-        title = info.get("title", target) if isinstance(info, dict) else target
+
+        meta_info = info.get("entries", [info])[0] if isinstance(info, dict) and "entries" in info else info
+        title = meta_info.get("title", target) if isinstance(meta_info, dict) else target
+        performer = meta_info.get("uploader", "Unknown Artist") if isinstance(meta_info, dict) else "Unknown Artist"
+        duration = int(meta_info.get("duration", 0)) if isinstance(meta_info, dict) else 0
 
         await event.edit(f"📤 **Uploading MP3 Audio:** `{format_bytes(file_size)}`...")
+
+        audio_attr = DocumentAttributeAudio(
+            duration=duration,
+            title=str(title)[:64],
+            performer=str(performer)[:64],
+            voice=False,
+        )
 
         await event.client.send_file(
             event.chat_id,
             file=file_path,
-            caption=f"🎵 **{title}**\n💾 `{format_bytes(file_size)}`",
+            caption=f"🎵 **{title}**\n👤 *{performer}* • 💾 `{format_bytes(file_size)}`",
+            attributes=[audio_attr],
             voice_note=False,
             supports_streaming=True,
             reply_to=event.topic_id,
