@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import html
 import logging
+import re
 import urllib.parse
 from typing import Any, Dict, Optional, Tuple
 import aiohttp
