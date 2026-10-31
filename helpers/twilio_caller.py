@@ -74,6 +74,16 @@ async def is_twilio_ready() -> Tuple[bool, str]:
     return True, "Ready"
 
 
+def sanitize_url(raw: str) -> str:
+    if not raw:
+        return ""
+    # Extract clean https URL if wrapped in markdown [url](url) or quotes/brackets
+    m = re.search(r"https://[^\s)\]\"'>]+", raw.strip())
+    if m:
+        return m.group(0).rstrip(".,;")
+    return raw.strip()
+
+
 def get_call_url(task_text: str, bin_url: str) -> str:
     """
     Constructs the target voice instructions URL.
@@ -81,10 +91,11 @@ def get_call_url(task_text: str, bin_url: str) -> str:
     passes the task text dynamically via query string parameters for Mustache templating.
     Otherwise uses Twilio's official voice demo URL.
     """
-    if bin_url:
+    clean_bin = sanitize_url(bin_url)
+    if clean_bin:
         encoded_msg = urllib.parse.quote_plus(task_text.strip())
-        sep = "&" if "?" in bin_url else "?"
-        return f"{bin_url}{sep}Message={encoded_msg}&Task={encoded_msg}"
+        sep = "&" if "?" in clean_bin else "?"
+        return f"{clean_bin}{sep}Message={encoded_msg}&Task={encoded_msg}"
     return FALLBACK_VOICE_URL
 
 

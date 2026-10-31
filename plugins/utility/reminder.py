@@ -441,7 +441,9 @@ async def twilio_cmd(event: SafeMessageWrapper, query: str = ""):
                 f"> 💡 *Create one in Twilio Console under Developer Tools -> TwiML Bins!*"
             )
             return
-        bin_url = parts[1].strip()
+        raw_url = parts[1].strip()
+        m = re.search(r"https://[^\s)\]\"'>]+", raw_url)
+        bin_url = m.group(0).rstrip(".,;") if m else raw_url
         await db.set_setting("twilio_bin_url", bin_url)
         await event.edit(f"✅ **TwiML Bin URL Saved!**\n`{bin_url}`\nYour custom reminder text will now be spoken on calls! 📞")
         return
