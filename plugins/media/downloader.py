@@ -672,16 +672,60 @@ async def cookies_cmd(event: SafeMessageWrapper):
         )
         return
 
-    await event.edit("🍪 **Saving YouTube cookies to secure storage...**")
+    await event.edit("🍪 **Validating and saving YouTube cookies...**")
     try:
         os.makedirs("data", exist_ok=True)
+        temp_cookie_path = os.path.join("data", "cookies_temp.txt")
+        await event.client.download_media(reply, file=temp_cookie_path)
+
+        # Validate that it actually contains YouTube login cookies
+        has_youtube = False
+        has_auth_cookie = False
+        detected_domains = set()
+
+        with open(temp_cookie_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line_str = line.strip()
+                if not line_str or line_str.startswith("#"):
+                    continue
+                parts = line_str.split("\t")
+                if len(parts) >= 6:
+                    domain = parts[0].lstrip(".")
+                    detected_domains.add(domain)
+                    if "youtube.com" in domain:
+                        has_youtube = True
+                        cookie_name = parts[5].strip()
+                        if cookie_name in ["SID", "SSID", "HSID", "LOGIN_INFO", "__Secure-1PSID", "__Secure-3PSID"]:
+                            has_auth_cookie = True
+
+        if not has_youtube or not has_auth_cookie:
+            if os.path.exists(temp_cookie_path):
+                os.remove(temp_cookie_path)
+
+            domains_sample = ", ".join(list(detected_domains)[:3]) if detected_domains else "None"
+            await event.edit(
+                "⚠️ **Invalid YouTube Cookies File!**\n\n"
+                f"• **Detected Sites in file:** `{domains_sample}`\n"
+                "• **YouTube Login Session:** ❌ Missing\n\n"
+                "💡 **How to export correctly in 10 seconds:**\n"
+                "1. In your browser, switch to the **YouTube** tab (ensure you are logged in).\n"
+                "2. Click the **Get cookies.txt locally** extension icon on that tab.\n"
+                "3. Click **Export** to save the file.\n"
+                "4. Send that new file here and reply with `.cookies`!"
+            )
+            return
+
         cookie_path = os.path.join("data", "cookies.txt")
-        await event.client.download_media(reply, file=cookie_path)
+        if os.path.exists(cookie_path):
+            os.remove(cookie_path)
+        os.rename(temp_cookie_path, cookie_path)
+
         await event.edit(
-            "✅ **Cookies Successfully Saved!**\n\n"
-            "• **Location:** `data/cookies.txt`\n"
+            "✅ **YouTube Cookies Verified & Saved!**\n\n"
+            "• **Domain:** `.youtube.com`\n"
+            "• **Session:** Authenticated (`SID` detected)\n"
             "• **Status:** Active\n"
-            "• YouTube downloads are now unlocked on your AWS server!"
+            "• YouTube downloads are now unlocked on your AWS cloud server!"
         )
     except Exception as e:
         logger.exception("Failed to save cookies: %s", e)
