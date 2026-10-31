@@ -41,7 +41,8 @@ def test_formatters():
         fields=[("Field 1", "Value 1"), ("Field 2", "Value 2")],
         footer="Test Footer",
     )
-    assert "╭── 「 Test Card 」" in card
+    assert "Test Card" in card
+    assert "━━━━━━━━━━━━━━━━━━━━" in card
     assert "Field 1" in card
     assert "Test Footer" in card
 

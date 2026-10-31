@@ -69,6 +69,43 @@ def get_tier_badge(is_premium: bool) -> str:
     return "⚡ **Standard (Free Tier)**"
 
 
+ICON_MAP = {
+    "owner": "👤",
+    "account tier": "⚡",
+    "tier": "⚡",
+    "active ai model": "🧠",
+    "ai model": "🧠",
+    "ai key pool": "🔑",
+    "guardian shield": "🛡️",
+    "anti-ban shield": "🛡️",
+    "shield status": "🛡️",
+    "ai assistant mode": "🤖",
+    "uptime": "⏱️",
+    "python runtime": "🐍",
+    "round-trip latency": "📶",
+    "latency": "📶",
+    "data center": "🌐",
+    "socket state": "🔌",
+    "ram": "💾",
+    "host ram": "💾",
+    "memory": "💾",
+    "cpu": "⚡",
+    "host cpu": "⚡",
+    "cpu load": "⚡",
+    "disk": "💿",
+    "disk storage": "💿",
+    "process": "⚙️",
+    "process footprint": "⚙️",
+    "bot footprint": "⚙️",
+    "os platform": "💻",
+    "active threads": "🧵",
+    "approved contacts": "👥",
+    "pending inquiries": "⏳",
+    "total screened": "📊",
+    "spam protection": "🚫",
+}
+
+
 def make_card(
     title: str,
     fields: List[Tuple[str, str]],
@@ -76,18 +113,19 @@ def make_card(
     is_premium: bool = False,
 ) -> str:
     """
-    Renders an elegant, high-contrast information card.
-    Uses clean box-drawing glyphs that render beautifully on both mobile and desktop Telegram.
+    Renders an elegant, high-contrast, modern information card.
+    Uses clean horizontal rules and native Telegram blockquotes.
     """
     lines = [
-        f"╭── 「 {title} 」",
+        f"**{title}**",
+        "━━━━━━━━━━━━━━━━━━━━",
     ]
     for label, val in fields:
-        lines.append(f"│  • **{label}:** `{val}`")
+        icon = ICON_MAP.get(label.lower().strip(), "•")
+        lines.append(f"{icon} **{label}:** `{val}`")
 
     if footer:
-        lines.append("├──────────────────────────────")
-        lines.append(f"│  💡 _{footer}_")
+        lines.append("━━━━━━━━━━━━━━━━━━━━")
+        lines.append(f"> 💡 *{footer}*")
 
-    lines.append("╰──────────────────────────────")
     return "\n".join(lines)

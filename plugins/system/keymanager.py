@@ -100,24 +100,20 @@ async def check_keys_cmd(event: SafeMessageWrapper):
     current_model = await ai_pool.get_current_model()
     results = await ai_pool.benchmark_all_keys()
     lines = [
-        "🛡️ **Dynamic AI Multi-Key Pool Status**",
+        "🛡️ **Dynamic AI Multi-Key Rotation Pool**",
         f"🧠 **Active Model:** `{current_model}`",
-        "──────────────────────────────",
+        "━━━━━━━━━━━━━━━━━━━━",
     ]
 
     for item in results:
         status_icon = "🟢" if "Online" in item["status"] else "🔴"
         lines.append(
-            f"{status_icon} **Key #{item['id']}** (`{item['preview']}`)\n"
-            f"   • Provider: `{item['provider'].upper()}`\n"
-            f"   • Latency: `{item['latency_ms']}ms`\n"
-            f"   • Requests Served: `{item.get('requests', 0)}`\n"
-            f"   • Status: `{item['status']}`"
+            f"{status_icon} **Key #{item['id']}** `{item['preview']}` • `{item['latency_ms']}ms` • `{item['status']}`"
         )
 
-    lines.append("──────────────────────────────")
-    lines.append(f"📊 **Total Active Keys:** `{len(results)}`")
-    lines.append("💡 *Requests automatically load-balance across all online keys.*")
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append(f"📊 **Active Pool:** `{len(results)} Keys in Rotation`")
+    lines.append("> 💡 *Round-robin load balancing & instant 429 auto-failover.*")
 
     await event.edit("\n".join(lines))
 
