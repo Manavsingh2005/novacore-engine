@@ -10,6 +10,7 @@ Features:
 - Auto-sanitizes Telegram markdown formatted URLs [text](url).
 - Cloud cookies support (.cookies) to bypass YouTube datacenter IP challenges.
 - Dynamic Deno / EJS remote component solver for YouTube JavaScript challenges.
+- Searches official YouTube releases first, falls back to SoundCloud.
 - Immediate disk cleanup after upload.
 """
 
@@ -223,11 +224,11 @@ async def song_cmd(event: SafeMessageWrapper, query: str = ""):
         await event.edit("❌ **Usage:** `.song <song title or URL>`")
         return
 
-    # For search queries: search SoundCloud first (pristine 320kbps audio & zero datacenter blocks on AWS)
+    # For search queries: search YouTube official tracks first, fallback to SoundCloud
     if target.startswith(("http://", "https://")):
         search_query = target
     else:
-        search_query = f"scsearch1:{target}"
+        search_query = f"ytsearch1:{target}"
 
     await event.edit(f"🎵 **Searching and extracting audio for:** `{target}`...")
 
@@ -251,9 +252,9 @@ async def song_cmd(event: SafeMessageWrapper, query: str = ""):
                 try:
                     return ydl.extract_info(search_query, download=True)
                 except Exception as inner_e:
-                    # If SoundCloud search fails and it wasn't a URL, fallback to YouTube search
+                    # If YouTube search fails and it wasn't a URL, fallback to SoundCloud search
                     if not target.startswith(("http://", "https://")):
-                        return ydl.extract_info(f"ytsearch1:{target}", download=True)
+                        return ydl.extract_info(f"scsearch1:{target}", download=True)
                     raise inner_e
 
         info = await loop.run_in_executor(None, _extract)
