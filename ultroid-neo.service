@@ -1,0 +1,15 @@
+[Unit]
+Description=Ultroid-Neo Telegram Userbot Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ultroid-neo
+ExecStart=/root/ultroid-neo/.venv/bin/python main.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

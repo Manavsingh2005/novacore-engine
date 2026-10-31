@@ -1,0 +1,26 @@
+# ==========================================
+# Render Blueprint Specification (render.yaml)
+# Deploys Ultroid-Neo as a 24/7 Free Web Service
+# ==========================================
+services:
+  - type: web
+    name: ultroid-neo
+    runtime: docker
+    plan: free
+    region: frankfurt # or oregon, ohio, singapore
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: STRING_SESSION
+        sync: false
+      - key: GROQ_API_KEYS
+        sync: false
+      - key: ANTI_BAN_GUARD
+        value: "true"
+      - key: DEFAULT_AI_MODEL
+        value: "qwen/qwen3.8-27b"
+    healthCheckPath: /health

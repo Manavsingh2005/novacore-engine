@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  ultroid-neo:
+    build: .
+    container_name: ultroid_neo
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8080:8080"
+    environment:
+      - PYTHONUNBUFFERED=1

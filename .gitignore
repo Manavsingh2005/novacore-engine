@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Environment Variables & Secrets (CRITICAL)
+.env
+.env.local
+.env.*.local
+
+# Local SQLite Database & Storage
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Media and temporary downloads
+downloads/
+temp/
+*.tmp
+*.mp3
+*.mp4
+*.ogg
+*.wav
+*.png
+*.jpg
+*.jpeg
+*.webp
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS-specific
+.DS_Store
+Thumbs.db
