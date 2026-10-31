@@ -1,5 +1,5 @@
 """
-Ultroid-Neo: Micro Web Health Server for 24/7 PaaS Hosting
+NovaCore: Micro Web Health Server for 24/7 PaaS Hosting
 Runs a lightweight aiohttp server bound to $PORT (e.g. 8080).
 Allows free-tier platforms (Render, Koyeb, Hugging Face Spaces) to stay awake 24/7
 when pinged by free uptime services (e.g. UptimeRobot or Cron-job.org).
@@ -22,14 +22,14 @@ from core.config import settings
 from core.ai_pool import ai_pool
 from helpers.formatters import format_uptime, format_bytes
 
-logger = logging.getLogger("ultroid_neo.web_server")
+logger = logging.getLogger("novacore.web_server")
 
 HTML_DASHBOARD = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ultroid-Neo Daemon</title>
+    <title>NovaCore Daemon</title>
     <style>
         :root {
             --bg: #0d1117;
@@ -137,7 +137,7 @@ HTML_DASHBOARD = """<!DOCTYPE html>
 <body>
     <div class="card">
         <div class="header">
-            <h1 class="title">🤖 Ultroid-Neo</h1>
+            <h1 class="title">🤖 NovaCore</h1>
             <div class="status-badge">ONLINE</div>
         </div>
         <div class="grid">
@@ -198,7 +198,7 @@ class WebHealthServer:
         uptime_str = format_uptime(self.start_time)
         data = {
             "status": "online",
-            "bot": "Ultroid-Neo",
+            "bot": "NovaCore",
             "version": "1.0.0",
             "uptime": uptime_str,
             "active_ai_keys": ai_pool.key_count,
@@ -216,7 +216,7 @@ class WebHealthServer:
         current_model = await ai_pool.get_current_model()
 
         data = {
-            "bot": "Ultroid-Neo",
+            "bot": "NovaCore",
             "version": "1.0.0",
             "uptime_seconds": int(time.time() - self.start_time),
             "uptime": format_uptime(self.start_time),

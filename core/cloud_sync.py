@@ -1,5 +1,5 @@
 """
-Ultroid-Neo: Telegram Cloud State Persistence
+NovaCore: Telegram Cloud State Persistence
 Allows 100% state persistence across ephemeral cloud container redeployments (Render, Koyeb, Railway).
 Automatically saves and restores SQLite database snapshots in Telegram Saved Messages.
 """
@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Any
 from core.config import settings
 
-logger = logging.getLogger("ultroid_neo.cloud_sync")
-BACKUP_TAG = "#ULTROID_NEO_DB_BACKUP"
+logger = logging.getLogger("novacore.cloud_sync")
+BACKUP_TAG = "#NOVACORE_STATE_BACKUP"
 
 
 async def backup_database_to_cloud(client: Any) -> bool:
@@ -29,7 +29,7 @@ async def backup_database_to_cloud(client: Any) -> bool:
     try:
         shutil.copy2(db_file, temp_backup)
         caption = (
-            f"💾 **Ultroid-Neo Cloud State Backup**\n"
+            f"💾 **NovaCore Cloud State Backup**\n"
             f"📅 Date: `{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}`\n"
             f"🏷️ Tag: {BACKUP_TAG}\n"
             f"> 💡 *Used for automatic state restoration on Render / cloud container rebuilds.*"

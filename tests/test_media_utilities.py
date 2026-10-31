@@ -6,7 +6,7 @@ import io
 import time
 import pytest
 from PIL import Image
-from plugins.media.kang import resize_image_for_sticker
+from plugins.media.sticker import resize_image_for_sticker
 from core.database import Database
 
 

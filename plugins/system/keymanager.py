@@ -1,5 +1,5 @@
 """
-Ultroid-Neo Plugin: Dynamic In-Chat API Key & Model Manager
+NovaCore Plugin: Dynamic In-Chat API Key & Model Manager
 Commands:
   .addkey <provider> <key>  - Dynamically adds a new API key without server restart
   .delkey <provider> <id>   - Deletes an API key by ID
@@ -15,7 +15,7 @@ from core.dispatcher import client_cmd, SafeMessageWrapper
 from core.database import db
 from core.ai_pool import ai_pool
 
-logger = logging.getLogger("ultroid_neo.plugin.keymanager")
+logger = logging.getLogger("novacore.plugin.keymanager")
 
 
 @client_cmd(

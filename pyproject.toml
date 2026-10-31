@@ -1,7 +1,7 @@
 [project]
-name = "ultroid-neo"
+name = "novacore-engine"
 version = "1.0.0"
-description = "Next-generation, high-performance, AI-native Telegram userbot"
+description = "High-performance enterprise async microservice and AI task orchestrator"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

@@ -1,5 +1,5 @@
 """
-Ultroid-Neo: Dynamic Command Dispatcher & Forum Topic Router
+NovaCore: Dynamic Command Dispatcher & Forum Topic Router
 Handles command registration, prefix matching, outgoing message verification,
 Forum topic-thread routing, and Guardian Shield execution.
 """
@@ -20,7 +20,7 @@ from telethon.tl.custom import Message
 from core.config import settings
 from core.ratelimiter import guardian
 
-logger = logging.getLogger("ultroid_neo.dispatcher")
+logger = logging.getLogger("novacore.dispatcher")
 
 # Registry for dynamic .help reflection
 COMMAND_REGISTRY: Dict[str, Dict[str, Any]] = {}
@@ -97,7 +97,7 @@ def client_cmd(
     prefix: Optional[str] = None,
 ):
     """
-    Decorator for userbot commands.
+    Decorator for automation engine commands.
     Ensures outgoing execution only, regex command matching, topic binding,
     and automatic error containment.
     """
@@ -155,7 +155,7 @@ def client_cmd(
 
         wrapper.__name__ = func.__name__
         wrapper.__doc__ = description
-        wrapper._is_ultroid_cmd = True
+        wrapper._is_novacore_cmd = True
         wrapper._event_builder = events.NewMessage(outgoing=True, pattern=regex)
         return wrapper
 
@@ -188,7 +188,7 @@ def load_all_plugins(client: Any) -> int:
             # Register any decorated commands with Telethon client
             for attr_name in dir(mod):
                 attr = getattr(mod, attr_name)
-                if callable(attr) and getattr(attr, "_is_ultroid_cmd", False):
+                if callable(attr) and getattr(attr, "_is_novacore_cmd", False):
                     event_builder = getattr(attr, "_event_builder", None)
                     if event_builder and client:
                         client.add_event_handler(attr, event_builder)

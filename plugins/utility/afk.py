@@ -1,5 +1,5 @@
 """
-Ultroid-Neo Plugin: Smart AFK Mode & Mention Logger (.afk, .unafk, .back)
+NovaCore Plugin: Smart AFK Mode & Mention Logger (.afk, .unafk, .back)
 Features:
 - Rate-limited group auto-reply (max 1 auto-reply per chat every 5 minutes).
 - Logs mentions and message links to Saved Messages while away.
@@ -17,7 +17,7 @@ from core.dispatcher import client_cmd, SafeMessageWrapper
 from core.database import db
 from helpers.formatters import format_uptime
 
-logger = logging.getLogger("ultroid_neo.plugin.utility.afk")
+logger = logging.getLogger("novacore.plugin.utility.afk")
 
 # Chat-level rate limiter: chat_id -> last_afk_notice_timestamp
 CHAT_NOTICE_TIMESTAMPS: dict[int, float] = {}

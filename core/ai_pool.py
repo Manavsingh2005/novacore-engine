@@ -1,5 +1,5 @@
 """
-Ultroid-Neo: Dynamic Elastic N-Key Groq AI Pool (Enterprise Grade)
+NovaCore: Dynamic Elastic N-Key Groq AI Pool (Enterprise Grade)
 Implements:
 - Round-robin load-balancing across arbitrary N keys.
 - Instant 429 rate-limit failover without dropping queries.
@@ -20,7 +20,7 @@ from groq import AsyncGroq, RateLimitError, APIError
 from core.config import settings
 from core.database import db
 
-logger = logging.getLogger("ultroid_neo.ai_pool")
+logger = logging.getLogger("novacore.ai_pool")
 
 
 class KeyState:

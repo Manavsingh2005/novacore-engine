@@ -1,5 +1,5 @@
 """
-Ultroid-Neo: Dual-Client MTProto & Bot API Manager
+NovaCore: Dual-Client MTProto & Bot API Manager
 Manages connection lifecycle, official Windows 11 device mimicry,
 account tier detection (Free vs Premium), and graceful shutdown.
 """
@@ -16,7 +16,7 @@ from core.config import settings
 from core.database import db
 from core.ratelimiter import guardian
 
-logger = logging.getLogger("ultroid_neo.client")
+logger = logging.getLogger("novacore.client")
 
 
 class ClientManager:
@@ -61,7 +61,7 @@ class ClientManager:
 
     async def start(self) -> None:
         """Initializes database, connects clients, and verifies account tier."""
-        logger.info("Initializing Ultroid-Neo database...")
+        logger.info("Initializing NovaCore database...")
         await db.connect()
 
         # Seed initial Groq keys from .env if present
@@ -104,7 +104,7 @@ class ClientManager:
 
     async def stop(self) -> None:
         """Safely disconnects clients and closes database."""
-        logger.info("Stopping Ultroid-Neo clients...")
+        logger.info("Stopping NovaCore clients...")
         self._is_running = False
 
         if self.user_client and self.user_client.is_connected():
@@ -116,7 +116,7 @@ class ClientManager:
             logger.info("Assistant bot client disconnected.")
 
         await db.close()
-        logger.info("Ultroid-Neo shutdown complete.")
+        logger.info("NovaCore shutdown complete.")
 
     @property
     def is_running(self) -> bool:

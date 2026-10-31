@@ -1,5 +1,5 @@
 """
-Ultroid-Neo Plugin: Dynamic Help Reference & Search (.help)
+NovaCore Plugin: Dynamic Help Reference & Search (.help)
 Introspects COMMAND_REGISTRY to provide clean, categorized documentation.
 Supports module browsing (.help ai) and direct command lookup (.help v2t).
 """
@@ -56,7 +56,7 @@ async def help_cmd(event: SafeMessageWrapper, query_arg: str = ""):
 
     # 3. Main Directory Menu
     lines = [
-        "🌟 **Ultroid-Neo Command Center (2026 Edition)**",
+        "🌟 **NovaCore Command Center (2026 Edition)**",
         "──────────────────────────────",
     ]
 

@@ -1,5 +1,5 @@
 """
-Ultroid-Neo Plugin: Cloud Notes & Snippet Manager (.save / .get / .notes / .clear)
+NovaCore Plugin: Cloud Notes & Snippet Manager (.save / .get / .notes / .clear)
 Stores notes and text snippets permanently in the local SQLite database.
 """
 

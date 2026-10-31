@@ -1,5 +1,5 @@
 """
-Ultroid-Neo Plugin: Smart Conversational PM-Permit & Anti-Report Shield (Phase 4)
+NovaCore Plugin: Smart Conversational PM-Permit & Anti-Report Shield (Phase 4)
 Engineered to 100% prevent SpamBot account restrictions:
 1. Context-Aware AI Greeting (Groq): Replies like a natural executive assistant.
 2. 24-Hour Hard Rate Cap: Max 1 auto-reply per stranger every 24 hours.
@@ -20,7 +20,7 @@ from core.ai_pool import ai_pool
 from core.config import settings
 from helpers.formatters import make_card, format_uptime
 
-logger = logging.getLogger("ultroid_neo.plugin.pmpermit")
+logger = logging.getLogger("novacore.plugin.pmpermit")
 
 
 @client_cmd(

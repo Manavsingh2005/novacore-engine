@@ -1,5 +1,5 @@
 """
-Ultroid-Neo Plugin: Neural Text-to-Speech Voice Note Generator (.tts / .say)
+NovaCore Plugin: Neural Text-to-Speech Voice Note Generator (.tts / .say)
 Powered by Microsoft Azure Cognitive Neural Voice models via edge-tts.
 Produces natural, human-grade speech complete with breath sounds and inflection,
 sent as an official Telegram Voice Note with waveform!
@@ -14,7 +14,7 @@ import edge_tts
 from core.dispatcher import client_cmd, SafeMessageWrapper
 from core.database import db
 
-logger = logging.getLogger("ultroid_neo.plugin.media.tts")
+logger = logging.getLogger("novacore.plugin.media.tts")
 
 # Popular, ultra-realistic neural voices and easy shortcuts
 VOICE_MAP = {

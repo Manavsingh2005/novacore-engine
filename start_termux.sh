@@ -1,10 +1,10 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # ==========================================
-# Ultroid-Neo: Termux 24/7 Background Runner
+# NovaCore: Termux 24/7 Background Runner
 # ==========================================
 
 echo "=========================================="
-echo " Starting Ultroid-Neo on Android (Termux) "
+echo " Starting NovaCore on Android (Termux) "
 echo "=========================================="
 
 # Prevent Android OS from sleeping while on battery or Wi-Fi
@@ -15,5 +15,5 @@ if [ -d ".venv" ]; then
     source .venv/bin/activate
 fi
 
-# Run userbot
+# Run automation engine
 python main.py

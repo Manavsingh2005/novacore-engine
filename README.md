@@ -1,13 +1,13 @@
-# 🤖 Ultroid-Neo (2026 Edition)
+# 🤖 NovaCore (2026 Edition)
 
-Next-generation, high-performance, AI-native Telegram userbot engineered for modern Telegram features (**Topics/Forums**, **Subscription Neutrality**, and **4GB/2GB Media Streaming**).
+Next-generation, high-performance, AI-native Telegram automation engine engineered for modern Telegram features (**Topics/Forums**, **Subscription Neutrality**, and **4GB/2GB Media Streaming**).
 
 Built with Python 3.12+, Telethon, `uv`, `aiosqlite`, and powered by a dynamic **Groq Multi-Key AI Pool**.
 
 ---
 
 ## 🛡️ The Guardian Anti-Ban Shield (Account Safety #1)
-Ultroid-Neo is specifically hardened to protect primary personal accounts:
+NovaCore is specifically hardened to protect primary personal accounts:
 * **Official Client Mimicry:** Connects with authentic Windows 11 Desktop client signatures.
 * **Human Micro-Jitter:** Randomizes pacing (+150ms to +450ms) across all outbound events to avoid mechanical bot detection.
 * **Emergency Circuit Breaker:** Instantly aborts any action if Telegram issues a FloodWait $\ge 60$s and alerts your Saved Messages.
@@ -57,7 +57,7 @@ Ultroid-Neo is specifically hardened to protect primary personal accounts:
 
 ## 🌐 24/7 Forever-Free Hosting Guide
 
-Ultroid-Neo contains a built-in micro-web health server (`core/web_server.py`) that binds to `$PORT` (e.g. 8080).
+NovaCore contains a built-in micro-web health server (`core/web_server.py`) that binds to `$PORT` (e.g. 8080).
 
 ### Method 1: Koyeb / Render (PaaS + Free Ping)
 1. Fork or push this repository to your GitHub.
@@ -72,8 +72,8 @@ Ultroid-Neo contains a built-in micro-web health server (`core/web_server.py`) t
 2. Run:
    ```bash
    pkg update && pkg install python git ffmpeg
-   git clone <repo_url> ultroid-neo
-   cd ultroid-neo
+   git clone <repo_url> novacore-engine
+   cd novacore-engine
    pip install -r pyproject.toml
    termux-wake-lock
    python main.py

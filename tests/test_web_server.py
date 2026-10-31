@@ -21,7 +21,7 @@ async def test_web_health_server_endpoints():
                 assert resp.status == 200
                 data = await resp.json()
                 assert data["status"] == "online"
-                assert data["bot"] == "Ultroid-Neo"
+                assert data["bot"] == "NovaCore"
                 assert "uptime" in data
 
             # 2. Test /ping
@@ -35,7 +35,7 @@ async def test_web_health_server_endpoints():
                 assert resp.status == 200
                 assert "text/html" in resp.headers.get("Content-Type", "")
                 html = await resp.text()
-                assert "Ultroid-Neo" in html
+                assert "NovaCore" in html
                 assert "Guardian Shield" in html
 
             # 4. Test /stats (JSON analytics)

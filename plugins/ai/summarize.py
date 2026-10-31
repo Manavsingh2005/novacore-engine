@@ -1,5 +1,5 @@
 """
-Ultroid-Neo Plugin: Thread & Forum Topic Summarizer (.sum)
+NovaCore Plugin: Thread & Forum Topic Summarizer (.sum)
 Reads the last N messages in the current chat or forum topic and produces
 a structured summary with key topics, conclusions, and action items.
 """
@@ -10,7 +10,7 @@ import logging
 from core.dispatcher import client_cmd, SafeMessageWrapper
 from core.ai_pool import ai_pool
 
-logger = logging.getLogger("ultroid_neo.plugin.ai.summarize")
+logger = logging.getLogger("novacore.plugin.ai.summarize")
 
 
 @client_cmd(
@@ -32,7 +32,7 @@ async def summarize_cmd(event: SafeMessageWrapper, count_str: str = ""):
         iter_kwargs["reply_to"] = event.topic_id
 
     async for msg in event.client.iter_messages(event.chat_id, **iter_kwargs):
-        # Skip userbot commands themselves
+        # Skip automation engine commands themselves
         if msg.text and not msg.text.startswith("."):
             sender = "Unknown"
             if msg.sender:

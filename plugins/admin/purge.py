@@ -1,5 +1,5 @@
 """
-Ultroid-Neo Plugin: Safe Bulk Message Purger (.purge, .purgeme, .del)
+NovaCore Plugin: Safe Bulk Message Purger (.purge, .purgeme, .del)
 Deletes messages rapidly and safely using Telegram's native 100-message bulk deletion API.
 Paces requests with human micro-jitter to prevent anti-spam flags.
 """
@@ -11,7 +11,7 @@ import logging
 from core.dispatcher import client_cmd, SafeMessageWrapper
 from core.ratelimiter import guardian
 
-logger = logging.getLogger("ultroid_neo.plugin.admin.purge")
+logger = logging.getLogger("novacore.plugin.admin.purge")
 
 
 @client_cmd(

@@ -1,5 +1,5 @@
 """
-Ultroid-Neo Plugin: High-Speed Media & Song Downloader (.dl, .yt, .song)
+NovaCore Plugin: High-Speed Media & Song Downloader (.dl, .yt, .song)
 Uses yt-dlp to stream videos, audio, and media from YouTube, Twitter/X, Instagram,
 and hundreds of supported websites.
 Features:
@@ -24,7 +24,7 @@ from core.dispatcher import client_cmd, SafeMessageWrapper
 from core.ratelimiter import guardian
 from helpers.formatters import format_bytes
 
-logger = logging.getLogger("ultroid_neo.plugin.media.downloader")
+logger = logging.getLogger("novacore.plugin.media.downloader")
 
 
 @client_cmd(
@@ -45,7 +45,7 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
 
     await event.edit(f"🔎 **Inspecting media URL...**\n`{target_url}`")
 
-    temp_dir = tempfile.mkdtemp(prefix="ultroid_dl_")
+    temp_dir = tempfile.mkdtemp(prefix="novacore_dl_")
     last_hook_time = [0.0]
 
     def ytdl_progress_hook(d: dict):
@@ -166,7 +166,7 @@ async def song_cmd(event: SafeMessageWrapper, query: str = ""):
     search_query = target if target.startswith(("http://", "https://")) else f"ytsearch1:{target}"
     await event.edit(f"🎵 **Searching and extracting audio for:** `{target}`...")
 
-    temp_dir = tempfile.mkdtemp(prefix="ultroid_song_")
+    temp_dir = tempfile.mkdtemp(prefix="novacore_song_")
     ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": os.path.join(temp_dir, "%(title).50s.%(ext)s"),

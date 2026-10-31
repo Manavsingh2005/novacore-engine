@@ -1,5 +1,5 @@
 """
-Ultroid-Neo: The Guardian Anti-Ban Shield & Rate Limiting Engine
+NovaCore: The Guardian Anti-Ban Shield & Rate Limiting Engine
 Implements official device mimicry, human-like micro-jitter, progress edit throttling,
 and an emergency FloodWait circuit breaker.
 """
@@ -15,7 +15,7 @@ from telethon.errors import FloodWaitError
 
 from core.config import settings
 
-logger = logging.getLogger("ultroid_neo.guardian")
+logger = logging.getLogger("novacore.guardian")
 
 
 class GuardianShield:
@@ -36,7 +36,7 @@ class GuardianShield:
         Applies randomized human micro-jitter between outbound requests.
         Mimics human pacing to avoid mechanical burst detection by Telegram anti-spam.
         """
-        if not settings.ANTI_BAN_GUARD:
+        if not settings.GUARDIAN_SHIELD:
             return
 
         async with self.lock:

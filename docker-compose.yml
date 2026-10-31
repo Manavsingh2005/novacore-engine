@@ -1,9 +1,9 @@
 version: "3.8"
 
 services:
-  ultroid-neo:
+  novacore-engine:
     build: .
-    container_name: ultroid_neo
+    container_name: novacore
     restart: always
     env_file:
       - .env

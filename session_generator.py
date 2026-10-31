@@ -1,5 +1,5 @@
 """
-Ultroid-Neo: Safe Offline Telegram String Session Generator
+NovaCore: Safe Offline Telegram String Session Generator
 Runs 100% locally on your machine to securely generate an authentic Telethon StringSession.
 Binds to official Windows 11 Desktop client signatures from the moment of creation.
 """
@@ -59,7 +59,7 @@ def update_env_file(api_id: int, api_hash: str, string_session: str):
 
 async def generate_session():
     print("=" * 60)
-    print("   Ultroid-Neo: Safe Offline Session Generator")
+    print("   NovaCore: Safe Offline Session Generator")
     print("   (100% Local • Zero Telemetry • Desktop Mimicry)")
     print("=" * 60)
 
@@ -133,7 +133,7 @@ async def generate_session():
     try:
         await client.send_message(
             "me",
-            f"🛡️ **Ultroid-Neo Session String Backed Up**\n\n`{string_session}`\n\n*(Keep this strictly private)*",
+            f"🛡️ **NovaCore Session String Backed Up**\n\n`{string_session}`\n\n*(Keep this strictly private)*",
         )
         print("[+] Also safely backed up to your Telegram 'Saved Messages'.")
     except Exception:
@@ -144,7 +144,7 @@ async def generate_session():
         update_env_file(api_id, api_hash, string_session)
 
     await client.disconnect()
-    print("\n[✓] Done! You can now run the userbot with: python main.py")
+    print("\n[✓] Done! You can now run the automation engine with: python main.py")
 
 
 if __name__ == "__main__":

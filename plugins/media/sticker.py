@@ -1,5 +1,5 @@
 """
-Ultroid-Neo Plugin: Sticker Kanger & Inspector (.kang, .stickerinfo)
+NovaCore Plugin: Sticker Kanger & Inspector (.kang, .stickerinfo)
 Converts any image, photo, or replied sticker into an official Telegram sticker format (512x512 PNG).
 Inspects sticker pack attributes and document metadata.
 """
@@ -13,7 +13,7 @@ from telethon.tl.types import DocumentAttributeSticker, DocumentAttributeImageSi
 from core.dispatcher import client_cmd, SafeMessageWrapper
 from helpers.formatters import make_card, format_bytes
 
-logger = logging.getLogger("ultroid_neo.plugin.media.kang")
+logger = logging.getLogger("novacore.plugin.media.kang")
 
 
 def resize_image_for_sticker(image_bytes: bytes) -> io.BytesIO:

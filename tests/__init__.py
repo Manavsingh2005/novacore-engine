@@ -1,3 +1,3 @@
 """
-Ultroid-Neo Test Suite
+NovaCore Test Suite
 """

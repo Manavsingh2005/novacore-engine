@@ -1,5 +1,5 @@
 """
-Ultroid-Neo: Configuration Engine & Environment Validator
+NovaCore: Configuration Engine & Environment Validator
 Loads settings from .env file and environment variables with strict type validation.
 """
 
@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     # --- Command & Bot Customization ---
     COMMAND_PREFIX: str = Field(default=".", description="Command trigger prefix")
     DATABASE_PATH: str = Field(
-        default="data/ultroid_neo.db",
+        default="data/novacore.db",
         description="Local SQLite database file path",
     )
     LOG_CHAT_ID: str = Field(
@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     )
 
     # --- The Guardian Anti-Ban Shield Settings ---
-    ANTI_BAN_GUARD: bool = Field(default=True, description="Enable anti-ban defenses")
+    GUARDIAN_SHIELD: bool = Field(default=True, description="Enable anti-ban defenses")
     FLOOD_WAIT_CIRCUIT_BREAKER_SECS: int = Field(
         default=60,
         description="FloodWait seconds threshold to trigger emergency circuit breaker",

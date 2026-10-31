@@ -1,5 +1,5 @@
 """
-Ultroid-Neo Plugin: Voice-to-Text Transcription & Translation (.v2t)
+NovaCore Plugin: Voice-to-Text Transcription & Translation (.v2t)
 Transcribes incoming audio, voice notes, and round video notes using Groq Whisper.
 Supports:
 - Ghost Mode (Default in private chats/groups):
@@ -21,7 +21,7 @@ from core.dispatcher import client_cmd, SafeMessageWrapper
 from core.ai_pool import ai_pool
 from core.database import db
 
-logger = logging.getLogger("ultroid_neo.plugin.ai.transcribe")
+logger = logging.getLogger("novacore.plugin.ai.transcribe")
 
 
 @client_cmd(

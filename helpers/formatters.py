@@ -1,5 +1,5 @@
 """
-Ultroid-Neo: Tier-Adaptive Formatter & Visual Styling Engine
+NovaCore: Tier-Adaptive Formatter & Visual Styling Engine
 Dynamically formats messages based on user account tier (Free vs Premium).
 Guarantees clean, aesthetic Unicode formatting for non-subscription accounts
 with zero broken fallback entity IDs.

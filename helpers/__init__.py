@@ -1,3 +1,3 @@
 """
-Ultroid-Neo Helpers Package
+NovaCore Helpers Package
 """

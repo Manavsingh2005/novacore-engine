@@ -1,5 +1,5 @@
 """
-Ultroid-Neo Plugin: Process Lifecycle & Diagnostics (.restart, .logs)
+NovaCore Plugin: Process Lifecycle & Diagnostics (.restart, .logs)
 Provides safe process reloading and private log retrieval routed to Saved Messages.
 """
 
@@ -15,7 +15,7 @@ from core.dispatcher import client_cmd, SafeMessageWrapper
 from core.client import manager
 from core.cloud_sync import backup_database_to_cloud, restore_database_from_cloud
 
-logger = logging.getLogger("ultroid_neo.plugin.lifecycle")
+logger = logging.getLogger("novacore.plugin.lifecycle")
 
 
 @client_cmd(
@@ -28,7 +28,7 @@ async def update_cmd(event: SafeMessageWrapper):
     deploy_hook = os.getenv("RENDER_DEPLOY_HOOK")
 
     if deploy_hook:
-        await event.edit("🚀 **Triggering Render Instant Deploy Webhook...**\n`Render is building and restarting your userbot.`")
+        await event.edit("🚀 **Triggering Render Instant Deploy Webhook...**\n`Render is building and restarting your automation engine.`")
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(deploy_hook, timeout=15) as resp:
@@ -57,7 +57,7 @@ async def update_cmd(event: SafeMessageWrapper):
             if "Already up to date" in out:
                 await event.edit(f"✅ **Already up to date!**\n`{out}`")
             else:
-                await event.edit(f"📥 **Updates Pulled:**\n`{out[:300]}`\n\n🔄 *Restarting userbot...*")
+                await event.edit(f"📥 **Updates Pulled:**\n`{out[:300]}`\n\n🔄 *Restarting automation engine...*")
                 await asyncio.sleep(2)
                 await manager.stop()
                 os.execv(sys.executable, [sys.executable, "main.py"])
@@ -93,21 +93,21 @@ async def restore_cmd(event: SafeMessageWrapper):
     await event.edit("🔄 **Checking Saved Messages for latest state backup...**")
     restored = await restore_database_from_cloud(event.client)
     if restored:
-        await event.edit("✅ **State Restored from Telegram Cloud!**\n`Restarting userbot to reload memory...`")
+        await event.edit("✅ **State Restored from Telegram Cloud!**\n`Restarting automation engine to reload memory...`")
         await asyncio.sleep(2)
         await manager.stop()
         os.execv(sys.executable, [sys.executable, "main.py"])
     else:
-        await event.edit("ℹ️ No previous `#ULTROID_NEO_DB_BACKUP` found in Saved Messages.")
+        await event.edit("ℹ️ No previous `#NOVACORE_STATE_BACKUP` found in Saved Messages.")
 
 
 @client_cmd(
     pattern="restart",
-    description="Safely reload and restart the userbot process",
+    description="Safely reload and restart the automation engine process",
     module="system",
 )
 async def restart_cmd(event: SafeMessageWrapper):
-    await event.edit("🔄 **Restarting Ultroid-Neo...**\n`Please wait 5-10 seconds.`")
+    await event.edit("🔄 **Restarting NovaCore...**\n`Please wait 5-10 seconds.`")
     logger.info("Restart command triggered by user.")
 
     # Graceful stop
@@ -130,7 +130,7 @@ async def logs_cmd(event: SafeMessageWrapper, lines_arg: str = ""):
 
     # In production/container, logs are streamed to stdout/stderr or log files
     log_text = (
-        f"📊 **Ultroid-Neo Diagnostics Log Stream (Last {count} lines)**\n"
+        f"📊 **NovaCore Diagnostics Log Stream (Last {count} lines)**\n"
         f"──────────────────────────────\n"
         f"• Python: {sys.version.split()[0]}\n"
         f"• Platform: {sys.platform}\n"

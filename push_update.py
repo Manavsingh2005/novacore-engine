@@ -1,5 +1,5 @@
 """
-Ultroid-Neo: 1-Click Push & Continuous Deployment Script
+NovaCore: 1-Click Push & Continuous Deployment Script
 Stages changes, runs tests, commits, pushes to GitHub, and triggers Render deploy hook.
 """
 
@@ -26,7 +26,7 @@ def run_cmd(cmd: list[str], check: bool = True) -> str:
 
 def main():
     commit_msg = sys.argv[1] if len(sys.argv) > 1 else f"update: {time.strftime('%Y-%m-%d %H:%M:%S')}"
-    print(f"\n🚀 [Ultroid-Neo] Initiating 1-Click Push ({commit_msg})\n")
+    print(f"\n🚀 [NovaCore] Initiating 1-Click Push ({commit_msg})\n")
 
     # 1. Run local test suite first to ensure zero regressions
     print("🧪 Step 1: Running unit tests...")
@@ -65,7 +65,7 @@ def main():
     remotes = run_cmd(["git", "remote"], check=False)
     if not remotes:
         print("⚠️ No git remote 'origin' configured yet.")
-        print("Run: git remote add origin https://github.com/YOUR_USERNAME/ultroid-neo.git")
+        print("Run: git remote add origin https://github.com/YOUR_USERNAME/novacore-engine.git")
         print("Then re-run this script!")
         return
 
@@ -90,7 +90,7 @@ def main():
         print("💡 Tip: Add RENDER_DEPLOY_HOOK=https://api.render.com/deploy/srv-... in .env")
         print("   Render will auto-deploy anyway via GitHub webhook if connected to your repository!")
 
-    print("\n🎉 Deployment cycle complete! Render is building your updated userbot.")
+    print("\n🎉 Deployment cycle complete! Render is building your updated automation engine.")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 """
-Ultroid-Neo Plugin: Status & Health Dashboard (.alive, .setalive, .resetalive)
+NovaCore Plugin: Status & Health Dashboard (.alive, .setalive, .resetalive)
 Displays real-time uptime, subscription status (Free vs Premium),
 AI pool metrics, and active model with customizable bio/card footer.
 """
@@ -18,7 +18,7 @@ BOT_START_TIME = time.time()
 
 @client_cmd(
     pattern="alive",
-    description="Display userbot status, subscription tier, and AI pool health",
+    description="Display automation engine status, subscription tier, and AI pool health",
     module="system",
 )
 async def alive_cmd(event: SafeMessageWrapper):
@@ -29,16 +29,16 @@ async def alive_cmd(event: SafeMessageWrapper):
     uptime_str = format_uptime(BOT_START_TIME)
     current_model = await ai_pool.get_current_model()
     custom_footer = await db.get_setting("custom_alive_footer")
-    footer_text = custom_footer or "Next-Gen AI Userbot • Fully Async & Lightweight"
+    footer_text = custom_footer or "Next-Gen AI Automation Engine • Fully Async & Lightweight"
 
     card = make_card(
-        title="🤖 Ultroid-Neo 2026 Edition",
+        title="🤖 NovaCore 2026 Engine",
         fields=[
             ("Owner", f"{me.first_name} (`{me.id}`)"),
             ("Account Tier", tier_label),
             ("Active AI Model", current_model),
             ("AI Key Pool", f"{ai_pool.key_count} Groq Keys (Round-Robin)"),
-            ("Guardian Shield", "Armed & Active (Zero-Ban Mode)"),
+            ("Guardian Shield", "Armed & Active (Autonomous Mode)"),
             ("Uptime", uptime_str),
             ("Python Runtime", sys.version.split()[0]),
         ],

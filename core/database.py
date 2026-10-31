@@ -1,7 +1,7 @@
 """
-Ultroid-Neo: Asynchronous SQLite Database Engine
+NovaCore: Asynchronous SQLite Database Engine
 Serverless, zero-configuration local database using aiosqlite.
-Manages settings, dynamic API keys, PM permit state, notes, and AFK status.
+Manages settings, dynamic API keys, inbox guard state, notes, memories, and alarms.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import aiosqlite
 
 from core.config import settings
 
-logger = logging.getLogger("ultroid_neo.database")
+logger = logging.getLogger("novacore.database")
 
 
 class Database:
@@ -50,7 +50,7 @@ class Database:
                 )
             """)
 
-            # Dynamic API keys table (Groq, Gemini, etc.)
+            # Dynamic API keys table (Groq, etc.)
             await cursor.execute("""
                 CREATE TABLE IF NOT EXISTS api_keys (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,7 +63,6 @@ class Database:
                     added_at REAL
                 )
             """)
-            # Migration check for existing installations
             try:
                 await cursor.execute("ALTER TABLE api_keys ADD COLUMN requests_count INTEGER DEFAULT 0")
             except Exception:
@@ -73,7 +72,7 @@ class Database:
             except Exception:
                 pass
 
-            # PM Permit table
+            # Inbox Guard table
             await cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pm_permit (
                     user_id INTEGER PRIMARY KEY,
@@ -110,6 +109,31 @@ class Database:
                     chat_id INTEGER NOT NULL,
                     message_id INTEGER NOT NULL,
                     delete_at REAL NOT NULL
+                )
+            """)
+
+            # Long-Term User Memories table
+            await cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_memories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    key_fact TEXT UNIQUE NOT NULL,
+                    value_text TEXT NOT NULL,
+                    category TEXT DEFAULT 'general',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            """)
+
+            # Scheduled Reminders & Voice Alarms table
+            await cursor.execute("""
+                CREATE TABLE IF NOT EXISTS scheduled_reminders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    reminder_text TEXT NOT NULL,
+                    due_timestamp REAL NOT NULL,
+                    voice_enabled INTEGER DEFAULT 1,
+                    is_triggered INTEGER DEFAULT 0,
+                    created_at REAL NOT NULL
                 )
             """)
             await self._conn.commit()
@@ -192,7 +216,7 @@ class Database:
         )
         await self._conn.commit()
 
-    # --- PM Permit Operations ---
+    # --- Inbox Guard (PM Permit) Operations ---
     async def is_pm_approved(self, user_id: int) -> bool:
         assert self._conn is not None
         async with self._conn.execute(
@@ -220,7 +244,6 @@ class Database:
         await self._conn.commit()
 
     async def record_pm_interaction(self, user_id: int) -> int:
-        """Records a contact interaction and returns updated interaction count."""
         assert self._conn is not None
         now = time.time()
         async with self._conn.execute(
@@ -277,7 +300,6 @@ class Database:
         await self._conn.commit()
 
     async def clear_afk(self) -> Tuple[bool, str, float]:
-        """Clears AFK and returns (was_afk, reason, afk_since)."""
         assert self._conn is not None
         async with self._conn.execute("SELECT is_afk, reason, afk_since FROM afk_state WHERE id = 1") as cursor:
             row = await cursor.fetchone()
@@ -362,6 +384,103 @@ class Database:
             record_ids,
         )
         await self._conn.commit()
+
+    # --- Long-Term Memory Operations ---
+    async def add_or_update_memory(self, key_fact: str, value_text: str, category: str = "general") -> None:
+        assert self._conn is not None
+        now = time.time()
+        await self._conn.execute(
+            """
+            INSERT INTO user_memories (key_fact, value_text, category, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(key_fact) DO UPDATE SET
+                value_text=excluded.value_text,
+                category=excluded.category,
+                updated_at=excluded.updated_at
+            """,
+            (key_fact.strip().lower(), value_text.strip(), category.strip(), now, now),
+        )
+        await self._conn.commit()
+
+    async def get_memory(self, key_fact: str) -> Optional[str]:
+        assert self._conn is not None
+        async with self._conn.execute(
+            "SELECT value_text FROM user_memories WHERE key_fact = ?", (key_fact.strip().lower(),)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row["value_text"] if row else None
+
+    async def get_all_memories(self) -> List[Dict[str, Any]]:
+        assert self._conn is not None
+        async with self._conn.execute(
+            "SELECT id, key_fact, value_text, category, created_at, updated_at FROM user_memories ORDER BY id ASC"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    async def delete_memory(self, key_or_id: str) -> bool:
+        assert self._conn is not None
+        key_or_id = key_or_id.strip()
+        if key_or_id.isdigit():
+            cursor = await self._conn.execute("DELETE FROM user_memories WHERE id = ?", (int(key_or_id),))
+        else:
+            cursor = await self._conn.execute("DELETE FROM user_memories WHERE key_fact = ?", (key_or_id.lower(),))
+        await self._conn.commit()
+        return cursor.rowcount > 0
+
+    async def clear_all_memories(self) -> None:
+        assert self._conn is not None
+        await self._conn.execute("DELETE FROM user_memories")
+        await self._conn.commit()
+
+    # --- Scheduled Reminders & Voice Alarms ---
+    async def add_reminder(self, chat_id: int, reminder_text: str, due_timestamp: float, voice_enabled: bool = True) -> int:
+        assert self._conn is not None
+        now = time.time()
+        cursor = await self._conn.execute(
+            "INSERT INTO scheduled_reminders (chat_id, reminder_text, due_timestamp, voice_enabled, is_triggered, created_at) VALUES (?, ?, ?, ?, 0, ?)",
+            (chat_id, reminder_text.strip(), due_timestamp, 1 if voice_enabled else 0, now),
+        )
+        await self._conn.commit()
+        return cursor.lastrowid
+
+    async def get_due_reminders(self) -> List[Dict[str, Any]]:
+        assert self._conn is not None
+        now = time.time()
+        async with self._conn.execute(
+            "SELECT id, chat_id, reminder_text, due_timestamp, voice_enabled FROM scheduled_reminders WHERE due_timestamp <= ? AND is_triggered = 0",
+            (now,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    async def mark_reminder_triggered(self, reminder_id: int) -> None:
+        assert self._conn is not None
+        await self._conn.execute(
+            "UPDATE scheduled_reminders SET is_triggered = 1 WHERE id = ?", (reminder_id,)
+        )
+        await self._conn.commit()
+
+    async def get_active_reminders(self, chat_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        assert self._conn is not None
+        now = time.time()
+        query = "SELECT id, chat_id, reminder_text, due_timestamp, voice_enabled FROM scheduled_reminders WHERE is_triggered = 0 AND due_timestamp > ?"
+        params = [now]
+        if chat_id is not None:
+            query += " AND chat_id = ?"
+            params.append(chat_id)
+        query += " ORDER BY due_timestamp ASC"
+        async with self._conn.execute(query, tuple(params)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    async def delete_reminder(self, reminder_id: int) -> bool:
+        assert self._conn is not None
+        cursor = await self._conn.execute(
+            "DELETE FROM scheduled_reminders WHERE id = ?", (reminder_id,)
+        )
+        await self._conn.commit()
+        return cursor.rowcount > 0
 
 
 # Global database instance

@@ -1,5 +1,5 @@
 """
-Ultroid-Neo Plugin: Message Tone & Style Suite (.rewrite, .fix, .explain)
+NovaCore Plugin: Message Tone & Style Suite (.rewrite, .fix, .explain)
 Polishes draft messages, fixes grammar/spelling, and explains complex text or code.
 """
 
@@ -9,7 +9,7 @@ import logging
 from core.dispatcher import client_cmd, SafeMessageWrapper
 from core.ai_pool import ai_pool
 
-logger = logging.getLogger("ultroid_neo.plugin.ai.rewrite")
+logger = logging.getLogger("novacore.plugin.ai.rewrite")
 
 STYLES = {
     "prof": "formal, polished, and executive professional",

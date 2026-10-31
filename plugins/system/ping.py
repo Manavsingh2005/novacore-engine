@@ -1,5 +1,5 @@
 """
-Ultroid-Neo Plugin: Advanced Server Ping & Connection Diagnostics (.ping)
+NovaCore Plugin: Advanced Server Ping & Connection Diagnostics (.ping)
 Measures MTProto socket round-trip, datacenter location, and Guardian Shield pacing metrics.
 """
 
@@ -35,7 +35,7 @@ async def ping_cmd(event: SafeMessageWrapper):
         perf_status = "🟠 High Latency"
 
     card = make_card(
-        title="⚡ Ultroid-Neo Diagnostics",
+        title="⚡ NovaCore Diagnostics",
         fields=[
             ("Round-Trip Latency", f"{latency_ms} ms ({perf_status})"),
             ("Data Center", dc_location),

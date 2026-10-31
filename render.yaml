@@ -1,10 +1,10 @@
 # ==========================================
 # Render Blueprint Specification (render.yaml)
-# Deploys Ultroid-Neo as a 24/7 Free Web Service
+# Deploys NovaCore as a 24/7 Free Web Service
 # ==========================================
 services:
   - type: web
-    name: ultroid-neo
+    name: novacore-engine
     runtime: docker
     plan: free
     region: singapore
@@ -19,7 +19,7 @@ services:
         sync: false
       - key: GROQ_API_KEYS
         sync: false
-      - key: ANTI_BAN_GUARD
+      - key: GUARDIAN_SHIELD
         value: "true"
       - key: DEFAULT_AI_MODEL
         value: "qwen/qwen3.8-27b"

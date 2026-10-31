@@ -1,5 +1,5 @@
 """
-Ultroid-Neo Plugin: Advanced System Resource Monitor (.sysinfo)
+NovaCore Plugin: Advanced System Resource Monitor (.sysinfo)
 Displays real-time host RAM, CPU load, disk storage, OS kernel,
 and bot process footprint with visual progress bars.
 """

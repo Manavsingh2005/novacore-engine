@@ -1,3 +1,3 @@
 """
-Ultroid-Neo Plugins Package
+NovaCore Plugins Package
 """

@@ -1,3 +1,3 @@
 """
-Ultroid-Neo Core Package
+NovaCore Core Package
 """
