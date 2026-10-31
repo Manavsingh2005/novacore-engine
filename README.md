@@ -1,3 +1,13 @@
+---
+title: NovaCore Microservice
+emoji: ⚡
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # 🤖 NovaCore (2026 Edition)
 
 Next-generation, high-performance, AI-native Telegram automation engine engineered for modern Telegram features (**Topics/Forums**, **Subscription Neutrality**, and **4GB/2GB Media Streaming**).
@@ -11,7 +21,7 @@ NovaCore is specifically hardened to protect primary personal accounts:
 * **Official Client Mimicry:** Connects with authentic Windows 11 Desktop client signatures.
 * **Human Micro-Jitter:** Randomizes pacing (+150ms to +450ms) across all outbound events to avoid mechanical bot detection.
 * **Emergency Circuit Breaker:** Instantly aborts any action if Telegram issues a FloodWait $\ge 60$s and alerts your Saved Messages.
-* **Anti-Report PM-Permit:** Uses polite, human-assistant greetings with a strict **1-message-per-24h rate cap per stranger**, completely preventing annoying spam reports.
+* **Anti-Report Inbox-Guard:** Uses polite, human-assistant greetings with a strict **1-message-per-24h rate cap per stranger**, completely preventing annoying spam reports.
 
 ---
 
@@ -37,16 +47,21 @@ NovaCore is specifically hardened to protect primary personal accounts:
 | **Alive** | `.alive` | Display bot status, uptime, active keys, and tier. |
 | **Sysinfo** | `.sysinfo` | Real-time RAM, CPU, and process footprint monitor. |
 | **Help** | `.help [module]` | Dynamic command reference and usage tips. |
-| **Ask AI** | `.ask <prompt>` | Query Groq Llama 3.3 (250+ tokens/sec). |
+| **Ask AI** | `.ask <prompt>` | Query Groq Llama 3.3 (250+ tokens/sec) with long-term memory. |
+| **Remember**| `.remember <fact>` | Store personal facts and preferences into AI memory. |
+| **Memories**| `.memories` | View all active memories stored in AI brain. |
+| **Forget** | `.forget <id>` | Delete a memory entry from AI brain. |
+| **Remind** | `.remind <time> <task>` | Set voice call alarm & high-priority reminder alert. |
+| **Alarms** | `.alarms` | List upcoming scheduled voice reminders. |
+| **Del Remind**| `.delremind <id>` | Cancel a scheduled reminder. |
 | **Summarize**| `.sum [count]` | Summarize recent messages in current chat or topic. |
 | **Voice-to-Text** | `.v2t` (reply) | Transcribe audio/voice note with Groq Whisper. |
 | **Rewrite** | `.rewrite [style]` | Polish draft into professional, concise, or casual tone. |
 | **Add Key** | `.addkey groq <key>` | Add new AI key to rotation pool on the fly. |
 | **Check Keys**| `.keys` | Benchmark latency and health of all keys in pool. |
-| **PM-Permit**| `.pmpermit on/off` | Toggle polite anti-report DM screener. |
 | **Approve** | `.approve` (or `.a`) | Whitelist user to message you in PM. |
 | **Downloader**| `.dl <url>` | Download media via yt-dlp with auto-split. |
-| **Kang** | `.kang [emoji]` | Format replied photo/sticker into 512x512 sticker. |
+| **Sticker** | `.sticker [emoji]` | Convert photo/sticker into 512x512 Telegram sticker. |
 | **AFK** | `.afk [reason]` | Away mode with mention logger & auto-reply. |
 | **Purge** | `.purge [count]` | Rapid, safe chunked bulk message deletion. |
 | **Save Note** | `.save <name> <text>`| Save text snippet or note into local database. |
@@ -57,30 +72,22 @@ NovaCore is specifically hardened to protect primary personal accounts:
 
 ## 🌐 24/7 Forever-Free Hosting Guide
 
-NovaCore contains a built-in micro-web health server (`core/web_server.py`) that binds to `$PORT` (e.g. 8080).
+NovaCore contains a built-in micro-web health server (`core/web_server.py`) that binds to `$PORT` (default 7860).
 
-### Method 1: Koyeb / Render (PaaS + Free Ping)
-1. Fork or push this repository to your GitHub.
-2. Create a new **Web Service** on [Koyeb](https://www.koyeb.com/) or [Render](https://render.com/).
-3. Add your `.env` variables (`API_ID`, `API_HASH`, `STRING_SESSION`, `GROQ_API_KEYS`).
-4. Set port to `8080`.
-5. Create a free monitor at [UptimeRobot](https://uptimerobot.com/) targeting `https://your-app.onrender.com/health` every 10 minutes.
-6. **Result:** Runs 24/7 forever for **$0**.
+### Method 1: Hugging Face Spaces (100% Free Docker Cloud)
+1. Go to [Hugging Face Spaces](https://huggingface.co/spaces) and click **Create new Space**.
+2. Select SDK: **Docker** (Blank).
+3. Connect your GitHub repository `novacore-engine` or push directly to the Space.
+4. Under Space **Settings -> Variables and secrets**, add your credentials:
+   - `API_ID`
+   - `API_HASH`
+   - `STRING_SESSION`
+   - `GROQ_API_KEYS`
+   - `GUARDIAN_SHIELD=true`
+   - `PORT=7860`
+5. **Result:** Deploys instantly with 2 vCPUs and 16 GB RAM for **$0**.
 
-### Method 2: Android Phone with Termux (100% Private, Zero Cloud)
-1. Install Termux on any spare Android phone.
-2. Run:
-   ```bash
-   pkg update && pkg install python git ffmpeg
-   git clone <repo_url> novacore-engine
-   cd novacore-engine
-   pip install -r pyproject.toml
-   termux-wake-lock
-   python main.py
-   ```
-3. The phone's battery serves as a built-in UPS against power cuts!
-
-### Method 3: Docker Compose (VPS / Oracle Cloud Always Free)
+### Method 2: Docker Compose (VPS / Local)
 ```bash
 docker compose up -d --build
 ```

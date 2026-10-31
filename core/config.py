@@ -55,7 +55,7 @@ class Settings(BaseSettings):
 
     # --- 24/7 Forever-Free PaaS Keep-Alive ---
     PORT: Optional[int] = Field(
-        default=None,
+        default=7860,
         description="Port for aiohttp micro health server (e.g. 8080 on Render/Koyeb)",
     )
 

@@ -16,6 +16,9 @@ env/
 .env.local
 .env.*.local
 render_env_copy_paste.txt
+koyeb_env_copy_paste.txt
+hf_secrets_copy_paste.txt
+*_copy_paste.txt
 
 # Local SQLite Database & Storage
 data/
