@@ -1,7 +1,7 @@
 """
 NovaCore: Twilio Autonomous Voice Calling Engine
 Places real GSM phone calls to the user's mobile phone via Twilio REST API (async aiohttp).
-Uses Amazon Polly neural voices with inline TwiML so no external webhooks are needed.
+Uses Twilio-approved webhook/TwiML Bin URL for 100% compatibility with Free Trial accounts.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import html
 import logging
+import urllib.parse
 from typing import Any, Dict, Optional, Tuple
 import aiohttp
 
@@ -17,8 +18,11 @@ from core.database import db
 
 logger = logging.getLogger("novacore.twilio_caller")
 
+# Official Twilio documentation voice XML used as fallback if no custom TwiML Bin is configured
+FALLBACK_VOICE_URL = "https://demo.twilio.com/docs/voice.xml"
 
-async def get_twilio_credentials() -> Dict[str, str]:
+
+async def get_twilio_credentials() -> Dict[str, Any]:
     """
     Retrieves Twilio credentials from SQLite database settings or fallback to environment variables.
     """
@@ -26,6 +30,7 @@ async def get_twilio_credentials() -> Dict[str, str]:
     auth_token = await db.get_setting("twilio_auth_token", "")
     from_number = await db.get_setting("twilio_from_number", "")
     to_number = await db.get_setting("twilio_to_number", "")
+    bin_url = await db.get_setting("twilio_bin_url", "")
     enabled = await db.get_setting("twilio_call_enabled", "true")
     voice = await db.get_setting("twilio_voice", "Polly.Aditi")
 
@@ -44,6 +49,7 @@ async def get_twilio_credentials() -> Dict[str, str]:
         "auth_token": auth_token.strip(),
         "from_number": from_number.strip(),
         "to_number": to_number.strip(),
+        "bin_url": bin_url.strip(),
         "enabled": enabled.strip().lower() in ("true", "1", "yes", "on"),
         "voice": voice.strip() or "Polly.Aditi",
     }
@@ -68,33 +74,24 @@ async def is_twilio_ready() -> Tuple[bool, str]:
     return True, "Ready"
 
 
-def build_twiml(task_text: str, voice: str = "Polly.Aditi") -> str:
+def get_call_url(task_text: str, bin_url: str) -> str:
     """
-    Generates inline TwiML XML instructions for Amazon Polly neural voice.
-    Escapes text to avoid XML injection.
+    Constructs the target voice instructions URL.
+    If user provided a TwiML Bin URL (e.g. https://handler.twilio.com/twiml/EH...),
+    passes the task text dynamically via query string parameters for Mustache templating.
+    Otherwise uses Twilio's official voice demo URL.
     """
-    escaped_task = html.escape(task_text.strip())
-    # Choose appropriate language code for Polly voices
-    lang = "en-IN" if "Aditi" in voice or "Kajal" in voice or "Raveena" in voice else "en-US"
-
-    return (
-        f'<?xml version="1.0" encoding="UTF-8"?>\n'
-        f'<Response>\n'
-        f'    <Pause length="1"/>\n'
-        f'    <Say voice="{voice}" language="{lang}">Attention Trade! This is your NovaCore alarm reminder.</Say>\n'
-        f'    <Pause length="1"/>\n'
-        f'    <Say voice="{voice}" language="{lang}">{escaped_task}</Say>\n'
-        f'    <Pause length="2"/>\n'
-        f'    <Say voice="{voice}" language="{lang}">Repeating your reminder: {escaped_task}. Goodbye!</Say>\n'
-        f'    <Hangup/>\n'
-        f'</Response>'
-    )
+    if bin_url:
+        encoded_msg = urllib.parse.quote_plus(task_text.strip())
+        sep = "&" if "?" in bin_url else "?"
+        return f"{bin_url}{sep}Message={encoded_msg}&Task={encoded_msg}"
+    return FALLBACK_VOICE_URL
 
 
 async def place_phone_call(task_text: str, custom_to: Optional[str] = None) -> Dict[str, Any]:
     """
-    Initiates an outbound phone call via Twilio REST API.
-    Returns dictionary with result status, call SID, or error message.
+    Initiates an outbound phone call via Twilio REST API using `Url`.
+    Complies with Twilio Free Trial account restrictions (no `Twiml` parameter allowed on trial).
     """
     creds = await get_twilio_credentials()
     ready, reason = await is_twilio_ready()
@@ -108,12 +105,12 @@ async def place_phone_call(task_text: str, custom_to: Optional[str] = None) -> D
         return {"success": False, "error": "Incomplete Twilio credentials"}
 
     endpoint = f"https://api.twilio.com/2010-04-01/Accounts/{creds['account_sid']}/Calls.json"
-    twiml_body = build_twiml(task_text, creds["voice"])
+    call_url = get_call_url(task_text, creds["bin_url"])
 
     payload = {
         "To": to_number,
         "From": creds["from_number"],
-        "Twiml": twiml_body,
+        "Url": call_url,
     }
 
     auth_str = f"{creds['account_sid']}:{creds['auth_token']}"
@@ -131,6 +128,7 @@ async def place_phone_call(task_text: str, custom_to: Optional[str] = None) -> D
                 if resp.status in (200, 201):
                     call_sid = resp_json.get("sid", "Unknown")
                     call_status = resp_json.get("status", "queued")
+                    has_custom_bin = bool(creds["bin_url"])
                     logger.info("Twilio voice call dispatched successfully! SID: %s, To: %s", call_sid, to_number)
                     return {
                         "success": True,
@@ -138,6 +136,7 @@ async def place_phone_call(task_text: str, custom_to: Optional[str] = None) -> D
                         "status": call_status,
                         "to": to_number,
                         "from": creds["from_number"],
+                        "has_custom_bin": has_custom_bin,
                     }
                 else:
                     err_code = resp_json.get("code", resp.status)

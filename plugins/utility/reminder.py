@@ -410,7 +410,7 @@ async def twilio_cmd(event: SafeMessageWrapper, query: str = ""):
             f"• **Auth Token:** {mask(creds['auth_token'])}\n"
             f"• **Twilio Number:** `{creds['from_number'] or 'Not Set'}`\n"
             f"• **Your Verified Mobile:** `{creds['to_number'] or 'Not Set'}`\n"
-            f"• **Polly AI Voice:** `{creds['voice']}`\n"
+            f"• **Polly AI Voice:** `{creds['voice']}`\n• **TwiML Bin:** `{creds.get('bin_url') or 'Default Voice Demo'}`\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📖 **Commands:**\n"
             f"• `.testcall` — Place an instant test call to your phone!\n"
@@ -429,6 +429,21 @@ async def twilio_cmd(event: SafeMessageWrapper, query: str = ""):
     elif subcmd == "off":
         await db.set_setting("twilio_call_enabled", "false")
         await event.edit("⛔ **Twilio phone calls DISABLED.** (Reminders will use Telegram audio notes only).")
+        return
+
+    elif subcmd in ("bin", "twiml"):
+        if len(parts) < 2:
+            curr_bin = await db.get_setting("twilio_bin_url", "")
+            await event.edit(
+                f"🔗 **TwiML Bin URL:** `{curr_bin or 'Not Set (using Twilio Demo Voice)'}`\n\n"
+                f"To set your TwiML Bin URL:\n"
+                f"`.twilio bin https://handler.twilio.com/twiml/EH...`\n\n"
+                f"> 💡 *Create one in Twilio Console under Developer Tools -> TwiML Bins!*"
+            )
+            return
+        bin_url = parts[1].strip()
+        await db.set_setting("twilio_bin_url", bin_url)
+        await event.edit(f"✅ **TwiML Bin URL Saved!**\n`{bin_url}`\nYour custom reminder text will now be spoken on calls! 📞")
         return
 
     elif subcmd == "config":
