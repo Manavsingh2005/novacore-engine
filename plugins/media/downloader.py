@@ -216,8 +216,10 @@ async def _download_and_send_song(
                 "🛡️ **YouTube Datacenter Protection**\n\n"
                 "YouTube blocks automated requests from cloud VPS/AWS datacenter IPs.\n\n"
                 "💡 **How to unlock YouTube:**\n"
-                "1. Export your YouTube cookies using `Get cookies.txt locally`.\n"
-                "2. Send that `cookies.txt` file here and reply to it with `.cookies`!"
+                "1. Switch to your **YouTube** tab in Chrome (ensure you are logged in).\n"
+                "2. Click the `Get cookies.txt locally` extension icon on that tab.\n"
+                "3. Send the exported `.txt` file here and reply with `.cookies`!\n\n"
+                "*(Instagram, Twitter/X, TikTok, Reddit, and SoundCloud work without cookies)*"
             )
         else:
             await event.edit(f"❌ **Song Download Failed:** `{err_msg}`")
@@ -595,12 +597,20 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
                 "🛡️ **YouTube Datacenter Protection**\n\n"
                 "YouTube blocks requests originating from cloud VPS/AWS datacenter IPs.\n\n"
                 "💡 **How to unlock YouTube:**\n"
-                "1. Export your YouTube cookies using the free browser extension `Get cookies.txt locally`.\n"
+                "1. Export your YouTube cookies from your **YouTube tab** using `Get cookies.txt locally`.\n"
                 "2. Send that `cookies.txt` file here and reply to it with `.cookies`!\n\n"
                 "*(Instagram, Twitter/X, TikTok, Reddit, and SoundCloud work without cookies)*"
             )
+        elif "No video formats found" in err_msg or "verify your age" in err_msg:
+            await event.edit(
+                "🔞 **Content Restricted / No Streams Available**\n\n"
+                "This video is age-gated, requires an account login on the hosting site, or has been removed.\n\n"
+                "*(Public videos on this site are supported)*"
+            )
+        elif "HTTP Error 404" in err_msg or "video has been removed" in err_msg:
+            await event.edit("❌ **Video Not Found:** This link appears to be deleted or private.")
         else:
-            await event.edit(f"❌ **Download Failed:** `{err_msg}`")
+            await event.edit(f"❌ **Download Failed:** `{err_msg[:250]}`")
     finally:
         for f in os.listdir(temp_dir):
             try:
