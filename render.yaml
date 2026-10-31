@@ -7,7 +7,7 @@ services:
     name: ultroid-neo
     runtime: docker
     plan: free
-    region: frankfurt # or oregon, ohio, singapore
+    region: singapore
     envVars:
       - key: PORT
         value: 8080
