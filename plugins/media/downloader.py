@@ -705,7 +705,7 @@ async def quick_choice_listener(event: SafeMessageWrapper):
 
 @client_cmd(
     pattern="cookies",
-    description="Save replied cookies.txt file to unlock YouTube downloads on AWS (.cookies)",
+    description="Save/merge replied cookies.txt file to unlock YouTube, XHamster & adult sites (.cookies)",
     module="media",
 )
 async def cookies_cmd(event: SafeMessageWrapper):
@@ -713,21 +713,19 @@ async def cookies_cmd(event: SafeMessageWrapper):
     if not reply or not reply.document:
         await event.edit(
             "❌ **Usage:** Reply to an exported `cookies.txt` file with `.cookies`.\n\n"
-            "This unlocks YouTube video and audio downloads on your AWS cloud server."
+            "This unlocks YouTube, XHamster age-gated videos, and cloud-protected media on your server."
         )
         return
 
-    await event.edit("🍪 **Validating and saving YouTube cookies...**")
+    await event.edit("🍪 **Validating and merging cookies into cloud vault...**")
     try:
         os.makedirs("data", exist_ok=True)
         temp_cookie_path = os.path.join("data", "cookies_temp.txt")
+        cookie_path = os.path.join("data", "cookies.txt")
         await event.client.download_media(reply, file=temp_cookie_path)
 
-        # Validate that it actually contains YouTube login cookies
-        has_youtube = False
-        has_auth_cookie = False
-        detected_domains = set()
-
+        # Parse new domains from uploaded file
+        new_domains: Dict[str, List[str]] = {}
         with open(temp_cookie_path, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
                 line_str = line.strip()
@@ -735,42 +733,50 @@ async def cookies_cmd(event: SafeMessageWrapper):
                     continue
                 parts = line_str.split("\t")
                 if len(parts) >= 6:
-                    domain = parts[0].lstrip(".")
-                    detected_domains.add(domain)
-                    if "youtube.com" in domain:
-                        has_youtube = True
-                        cookie_name = parts[5].strip()
-                        if cookie_name in ["SID", "SSID", "HSID", "LOGIN_INFO", "__Secure-1PSID", "__Secure-3PSID"]:
-                            has_auth_cookie = True
+                    domain = parts[0].lstrip(".").lower()
+                    new_domains.setdefault(domain, []).append(line)
 
-        if not has_youtube or not has_auth_cookie:
+        if not new_domains:
             if os.path.exists(temp_cookie_path):
                 os.remove(temp_cookie_path)
-
-            domains_sample = ", ".join(list(detected_domains)[:3]) if detected_domains else "None"
-            await event.edit(
-                "⚠️ **Invalid YouTube Cookies File!**\n\n"
-                f"• **Detected Sites in file:** `{domains_sample}`\n"
-                "• **YouTube Login Session:** ❌ Missing\n\n"
-                "💡 **How to export correctly in 10 seconds:**\n"
-                "1. In your browser, switch to the **YouTube** tab (ensure you are logged in).\n"
-                "2. Click the **Get cookies.txt locally** extension icon on that tab.\n"
-                "3. Click **Export** to save the file.\n"
-                "4. Send that new file here and reply with `.cookies`!"
-            )
+            await event.edit("❌ **Error:** No valid Netscape cookies found in the uploaded file.")
             return
 
-        cookie_path = os.path.join("data", "cookies.txt")
+        # Keep existing domains that are NOT in new_domains (preserves YouTube and other existing cookies)
+        all_active_domains = set(new_domains.keys())
+        kept_lines: List[str] = []
         if os.path.exists(cookie_path):
-            os.remove(cookie_path)
-        os.rename(temp_cookie_path, cookie_path)
+            with open(cookie_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    parts = line.strip().split("\t")
+                    if len(parts) >= 6:
+                        domain = parts[0].lstrip(".").lower()
+                        if domain in new_domains:
+                            continue  # Replace with updated cookie
+                        all_active_domains.add(domain)
+                        kept_lines.append(line)
+
+        # Write merged cookies
+        with open(cookie_path, "w", encoding="utf-8") as f:
+            f.write("# Netscape HTTP Cookie File\n# Managed by NovaCore Engine Vault\n\n")
+            for line in kept_lines:
+                f.write(line.rstrip("\r\n") + "\n")
+            for domain, lines in new_domains.items():
+                for line in lines:
+                    f.write(line.rstrip("\r\n") + "\n")
+
+        if os.path.exists(temp_cookie_path):
+            os.remove(temp_cookie_path)
+
+        updated_sample = ", ".join(list(new_domains.keys())[:3])
+        total_sample = ", ".join(list(all_active_domains)[:5])
 
         await event.edit(
-            "✅ **YouTube Cookies Verified & Saved!**\n\n"
-            "• **Domain:** `.youtube.com`\n"
-            "• **Session:** Authenticated (`SID` detected)\n"
+            "✅ **Cookies Successfully Saved & Merged!**\n\n"
+            f"• **Updated Site(s):** `{updated_sample}`\n"
+            f"• **Total Active Sites:** `{total_sample}`\n"
             "• **Status:** Active\n"
-            "• YouTube downloads are now unlocked on your AWS cloud server!"
+            "• Age-gated and account-locked videos for these sites are now unlocked on your cloud server!"
         )
     except Exception as e:
         logger.exception("Failed to save cookies: %s", e)
