@@ -3,9 +3,9 @@ NovaCore Plugin: High-Speed Media & Song Downloader (.dl, .yt, .song)
 Uses yt-dlp to stream videos, audio, and media from YouTube, Twitter/X, Instagram,
 and hundreds of supported websites.
 Features:
-- .dl / .yt: Downloads video with optimal resolution.
+- .dl / .yt: Downloads video with optimal resolution (supports Instagram Reels, YouTube, X, etc.).
 - .song <name or url>: Searches and downloads 320kbps MP3 audio with native metadata & player.
-- Anti-Ban 3.5s progress edit throttling.
+- Anti-Ban 3.5s progress edit throttling with thread-safe loop scheduling.
 - Dynamic 2GB auto-split for Free users / 4GB single uploads for Premium.
 - Immediate disk cleanup after upload.
 """
@@ -22,7 +22,6 @@ import yt_dlp
 from telethon.tl.types import DocumentAttributeAudio
 
 from core.dispatcher import client_cmd, SafeMessageWrapper
-from core.ratelimiter import guardian
 from helpers.formatters import format_bytes
 
 logger = logging.getLogger("novacore.plugin.media.downloader")
@@ -46,6 +45,7 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
 
     await event.edit(f"🔎 **Inspecting media URL...**\n`{target_url}`")
 
+    loop = asyncio.get_running_loop()
     temp_dir = tempfile.mkdtemp(prefix="novacore_dl_")
     last_hook_time = [0.0]
 
@@ -63,18 +63,24 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
                     f"• **Downloaded:** `{format_bytes(downloaded)}` / `{format_bytes(total)}`\n"
                     f"• **Speed:** `{format_bytes(int(speed))}/s`"
                 )
-                asyncio.create_task(event.edit(text))
+                try:
+                    asyncio.run_coroutine_threadsafe(event.edit(text), loop)
+                except Exception:
+                    pass
 
     ydl_opts = {
-        "format": "best[ext=mp4]/best",
+        "format": "bestvideo+bestaudio/best[ext=mp4]/best",
         "outtmpl": os.path.join(temp_dir, "%(title).50s.%(ext)s"),
         "progress_hooks": [ytdl_progress_hook],
         "quiet": True,
         "no_warnings": True,
         "max_filesize": 4000 * 1024 * 1024,  # 4GB limit
+        "merge_output_format": "mp4",
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        },
     }
 
-    loop = asyncio.get_event_loop()
     try:
         def _extract():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -86,7 +92,7 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
         downloaded_files = [
             os.path.join(temp_dir, f)
             for f in os.listdir(temp_dir)
-            if os.path.isfile(os.path.join(temp_dir, f))
+            if os.path.isfile(os.path.join(temp_dir, f)) and not f.endswith((".part", ".ytdl"))
         ]
 
         if not downloaded_files:
@@ -167,6 +173,7 @@ async def song_cmd(event: SafeMessageWrapper, query: str = ""):
     search_query = target if target.startswith(("http://", "https://")) else f"ytsearch1:{target}"
     await event.edit(f"🎵 **Searching and extracting audio for:** `{target}`...")
 
+    loop = asyncio.get_running_loop()
     temp_dir = tempfile.mkdtemp(prefix="novacore_song_")
     ydl_opts = {
         "format": "bestaudio/best",
@@ -182,7 +189,6 @@ async def song_cmd(event: SafeMessageWrapper, query: str = ""):
         ],
     }
 
-    loop = asyncio.get_event_loop()
     try:
         def _extract():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
