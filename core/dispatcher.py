@@ -161,6 +161,30 @@ def client_cmd(
 
     return decorator
 
+
+def client_raw_handler(event_builder):
+    """Decorator for custom raw Telethon event builders (e.g. interactive selection, replies)."""
+    def decorator(func):
+        sig = inspect.signature(func)
+        param_count = len(sig.parameters)
+
+        async def wrapper(event):
+            if not getattr(event, "out", True):
+                return
+            wrapped = SafeMessageWrapper(event)
+            try:
+                if param_count >= 1:
+                    await func(wrapped)
+                else:
+                    await func()
+            except Exception as e:
+                logger.exception("Error executing raw handler %s: %s", func.__name__, e)
+
+        wrapper.__name__ = func.__name__
+        wrapper._is_novacore_cmd = True
+        wrapper._event_builder = event_builder
+        return wrapper
+
     return decorator
 
 

@@ -1,17 +1,19 @@
 """
 NovaCore Plugin: High-Speed Media & Song Downloader (.dl, .yt, .song, .cookies)
-Uses yt-dlp to stream videos, audio, and media from YouTube, Twitter/X, Instagram,
-SoundCloud, and hundreds of supported websites.
 Features:
-- .dl / .yt: Downloads video with optimal resolution (supports Instagram Reels, YouTube, X, etc.).
-- .song <name or url>: Searches and downloads 320kbps MP3 audio with native metadata & player.
+- .song <name>: Interactive search with 5 top results, artist, and duration.
+  - Pick by replying `1`-`5` or sending `.song <number>`.
+  - Use `.song -1 <name>` or `.song -d <name>` for instant auto-download.
+  - Supports direct audio URLs.
+- .dl / .yt: Downloads video from YouTube, X, Instagram Reels, TikTok, Reddit, etc.
+  - Supports resolution tags: `.dl 1080 <url>`, `.dl 720 <url>`, `.dl 480 <url>`, `.dl 360 <url>`, `.dl audio <url>`.
+  - Supports interactive resolution selector: `.dl select <url>`.
 - Anti-Ban 3.5s progress edit throttling with thread-safe loop scheduling.
-- Dynamic 2GB auto-split for Free users / 4GB single uploads for Premium.
+- Dynamic 2GB Free tier / 4GB Premium single uploads.
 - Auto-sanitizes Telegram markdown formatted URLs [text](url).
-- Cloud cookies support (.cookies) to bypass YouTube datacenter IP challenges.
-- Dynamic Deno / EJS remote component solver for YouTube JavaScript challenges.
-- Searches official YouTube releases first, falls back to SoundCloud.
-- Immediate disk cleanup after upload.
+- Cloud cookies support (.cookies) to bypass YouTube datacenter bot challenges.
+- Deno / EJS remote component solver for YouTube JavaScript challenges.
+- Guaranteed disk cleanup in finally blocks to keep EC2 storage 100% clean.
 """
 
 from __future__ import annotations
@@ -22,14 +24,19 @@ import os
 import re
 import tempfile
 import time
-from typing import Optional
+from typing import Any, Dict, List, Optional
 import yt_dlp
+from telethon import events
 from telethon.tl.types import DocumentAttributeAudio
 
-from core.dispatcher import client_cmd, SafeMessageWrapper
+from core.dispatcher import client_cmd, client_raw_handler, SafeMessageWrapper
 from helpers.formatters import format_bytes
 
 logger = logging.getLogger("novacore.plugin.media.downloader")
+
+# Active search sessions keyed by chat_id
+SONG_SEARCH_CACHE: Dict[int, Dict[str, Any]] = {}
+DL_SELECT_CACHE: Dict[int, Dict[str, Any]] = {}
 
 
 def clean_media_target(text: str) -> str:
@@ -48,6 +55,18 @@ def clean_media_target(text: str) -> str:
         return url.rstrip("]>)\"'.,;")
 
     return text.strip()
+
+
+def format_duration(seconds: Optional[int | float]) -> str:
+    """Formats seconds into mm:ss or hh:mm:ss."""
+    if not seconds or seconds <= 0:
+        return "N/A"
+    s = int(seconds)
+    m, s = divmod(s, 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
 
 
 def get_base_ydl_opts(temp_dir: str, progress_hook=None) -> dict:
@@ -74,25 +93,400 @@ def get_base_ydl_opts(temp_dir: str, progress_hook=None) -> dict:
     return opts
 
 
+# ==========================================
+# AUDIO / SONG DOWNLOAD ENGINE
+# ==========================================
+
+async def _download_and_send_song(
+    event: SafeMessageWrapper,
+    target_url: str,
+    meta_hint: Optional[Dict[str, Any]] = None,
+):
+    """Executes high-speed 320kbps MP3 extraction and uploads to Telegram."""
+    loop = asyncio.get_running_loop()
+    temp_dir = tempfile.mkdtemp(prefix="novacore_song_")
+    last_hook_time = [0.0]
+
+    def song_progress_hook(d: dict):
+        if d.get("status") == "downloading":
+            now = time.time()
+            if now - last_hook_time[0] >= 3.5:
+                last_hook_time[0] = now
+                downloaded = d.get("downloaded_bytes", 0)
+                total = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
+                speed = d.get("speed", 0) or 0
+                pct = f"{int(downloaded / total * 100)}%" if total else "..."
+                text = (
+                    f"📥 **Downloading Audio:** `{pct}`\n"
+                    f"• **Downloaded:** `{format_bytes(downloaded)}` / `{format_bytes(total)}`\n"
+                    f"• **Speed:** `{format_bytes(int(speed))}/s`"
+                )
+                try:
+                    asyncio.run_coroutine_threadsafe(event.edit(text), loop)
+                except Exception:
+                    pass
+
+    ydl_opts = get_base_ydl_opts(temp_dir, song_progress_hook)
+    ydl_opts.update({
+        "format": "bestaudio/best",
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "320",
+            }
+        ],
+    })
+
+    try:
+        await event.edit("⚡ **Streaming audio track...**")
+
+        def _extract():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                return ydl.extract_info(target_url, download=True)
+
+        info = await loop.run_in_executor(None, _extract)
+        downloaded = [
+            os.path.join(temp_dir, f)
+            for f in os.listdir(temp_dir)
+            if f.endswith(".mp3")
+        ]
+
+        if not downloaded:
+            await event.edit("❌ **Error:** No audio track could be extracted.")
+            return
+
+        file_path = downloaded[0]
+        file_size = os.path.getsize(file_path)
+
+        meta_info = info.get("entries", [info])[0] if isinstance(info, dict) and "entries" in info else info
+        title = (
+            meta_info.get("title")
+            or (meta_hint and meta_hint.get("title"))
+            or "Track"
+        )
+        performer = (
+            meta_info.get("uploader")
+            or meta_info.get("channel")
+            or (meta_hint and meta_hint.get("uploader"))
+            or "NovaCore Audio"
+        )
+        duration = int(
+            meta_info.get("duration")
+            or (meta_hint and meta_hint.get("duration"))
+            or 0
+        )
+
+        await event.edit(f"📤 **Uploading MP3 Audio:** `{format_bytes(file_size)}`...")
+
+        audio_attr = DocumentAttributeAudio(
+            duration=duration,
+            title=str(title)[:64],
+            performer=str(performer)[:64],
+            voice=False,
+        )
+
+        last_up_time = [0.0]
+
+        async def upload_progress(current, total):
+            now = time.time()
+            if now - last_up_time[0] >= 3.5:
+                last_up_time[0] = now
+                pct = int(current / total * 100)
+                await event.edit(
+                    f"📤 **Uploading MP3:** `{pct}%` (`{format_bytes(current)}` / `{format_bytes(total)}`)"
+                )
+
+        await event.client.send_file(
+            event.chat_id,
+            file=file_path,
+            caption=f"🎵 **{title}**\n👤 *{performer}* • ⏱️ `{format_duration(duration)}` • 💾 `{format_bytes(file_size)}`",
+            attributes=[audio_attr],
+            voice_note=False,
+            supports_streaming=True,
+            progress_callback=upload_progress,
+            reply_to=event.topic_id,
+        )
+        await event.delete()
+    except Exception as e:
+        err_msg = str(e)
+        logger.exception("Song download failed: %s", err_msg)
+        if "confirm you’re not a bot" in err_msg or "Sign in to confirm" in err_msg:
+            await event.edit(
+                "🛡️ **YouTube Datacenter Protection**\n\n"
+                "YouTube blocks automated requests from cloud VPS/AWS datacenter IPs.\n\n"
+                "💡 **How to unlock YouTube:**\n"
+                "1. Export your YouTube cookies using `Get cookies.txt locally`.\n"
+                "2. Send that `cookies.txt` file here and reply to it with `.cookies`!"
+            )
+        else:
+            await event.edit(f"❌ **Song Download Failed:** `{err_msg}`")
+    finally:
+        for f in os.listdir(temp_dir):
+            try:
+                os.remove(os.path.join(temp_dir, f))
+            except OSError:
+                pass
+        try:
+            os.rmdir(temp_dir)
+        except OSError:
+            pass
+
+
 @client_cmd(
-    pattern=r"dl|yt",
-    description="Download media from YouTube, X, Instagram, or direct URLs (.dl <url>)",
+    pattern="song",
+    description="Interactive song search & 320kbps MP3 downloader (.song <title or url>)",
     module="media",
 )
-async def download_cmd(event: SafeMessageWrapper, url: str = ""):
-    raw_target = url.strip()
+async def song_cmd(event: SafeMessageWrapper, query: str = ""):
+    raw_target = query.strip()
     if not raw_target:
         reply = await event.get_reply_message()
         if reply and reply.text:
             raw_target = reply.text.strip()
 
-    target_url = clean_media_target(raw_target)
-
-    if not target_url:
-        await event.edit("❌ **Usage:** `.dl <url>` or reply to a link.")
+    if not raw_target:
+        await event.edit(
+            "❌ **Usage:** `.song <title or URL>`\n\n"
+            "• `.song treat you better` — Search top 5 tracks with selection menu\n"
+            "• `.song 1` to `.song 5` — Select track from previous search\n"
+            "• `.song -1 treat you better` — Auto-download top match immediately\n"
+            "• `.song <url>` — Direct MP3 download"
+        )
         return
 
-    await event.edit(f"🔎 **Inspecting media URL...**\n`{target_url}`")
+    # Check for direct track selection number: e.g. .song 1, .song 2
+    if re.fullmatch(r"[1-5]", raw_target):
+        choice = int(raw_target)
+        cached = SONG_SEARCH_CACHE.get(event.chat_id)
+        if not cached or (time.time() - cached.get("time", 0)) > 900:  # 15 min expiry
+            await event.edit("❌ **No active song search found.** Search first with `.song <title>`.")
+            return
+
+        entries = cached.get("entries", [])
+        if choice > len(entries):
+            await event.edit(f"❌ **Invalid selection.** Choose between `1` and `{len(entries)}`.")
+            return
+
+        selected = entries[choice - 1]
+        SONG_SEARCH_CACHE.pop(event.chat_id, None)
+        await event.edit(f"⚡ **Downloading Track #{choice}:** `{selected['title']}`...")
+        await _download_and_send_song(event, selected["url"], meta_hint=selected)
+        return
+
+    # Check for instant auto-download flag: -1, -d, --direct
+    auto_download_top = False
+    clean_query = raw_target
+    if re.search(r"^(-[1-5]|-d|--direct)\b", clean_query):
+        auto_download_top = True
+        clean_query = re.sub(r"^(-[1-5]|-d|--direct)\s*", "", clean_query).strip()
+    elif re.search(r"\s+(-[1-5]|-d|--direct)$", clean_query):
+        auto_download_top = True
+        clean_query = re.sub(r"\s+(-[1-5]|-d|--direct)$", "", clean_query).strip()
+
+    target = clean_media_target(clean_query)
+
+    # If it's a direct URL, download immediately
+    if target.startswith(("http://", "https://")):
+        await event.edit(f"🎵 **Extracting audio from URL:** `{target}`...")
+        await _download_and_send_song(event, target)
+        return
+
+    # Search for top 5 candidates
+    await event.edit(f"🔎 **Searching music for:** `{target}`...")
+    loop = asyncio.get_running_loop()
+
+    def _search_tracks() -> List[Dict[str, Any]]:
+        search_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": "in_playlist",
+            "skip_download": True,
+            "remote_components": ["ejs:github"],
+        }
+        cookie_path = os.path.join("data", "cookies.txt")
+        if os.path.exists(cookie_path) and os.path.getsize(cookie_path) > 0:
+            search_opts["cookiefile"] = cookie_path
+
+        tracks: List[Dict[str, Any]] = []
+        # 1. Search YouTube first
+        try:
+            with yt_dlp.YoutubeDL(search_opts) as ydl:
+                res = ydl.extract_info(f"ytsearch5:{target}", download=False)
+                for entry in (res.get("entries") or []):
+                    if not entry:
+                        continue
+                    v_id = entry.get("id")
+                    url = entry.get("url") or (f"https://www.youtube.com/watch?v={v_id}" if v_id else None)
+                    if url:
+                        tracks.append({
+                            "title": entry.get("title") or "Unknown Title",
+                            "uploader": entry.get("uploader") or entry.get("channel") or "Unknown Artist",
+                            "duration": entry.get("duration") or 0,
+                            "url": url,
+                            "id": v_id,
+                        })
+        except Exception as e:
+            logger.warning("YouTube search failed: %s, trying SoundCloud...", e)
+
+        # 2. Fallback to SoundCloud if YouTube gave no results
+        if not tracks:
+            try:
+                with yt_dlp.YoutubeDL(search_opts) as ydl:
+                    res = ydl.extract_info(f"scsearch5:{target}", download=False)
+                    for entry in (res.get("entries") or []):
+                        if not entry:
+                            continue
+                        tracks.append({
+                            "title": entry.get("title") or "Unknown Title",
+                            "uploader": entry.get("uploader") or "SoundCloud Artist",
+                            "duration": entry.get("duration") or 0,
+                            "url": entry.get("url") or entry.get("webpage_url"),
+                            "id": entry.get("id"),
+                        })
+            except Exception as sc_e:
+                logger.error("SoundCloud search also failed: %s", sc_e)
+
+        return tracks[:5]
+
+    results = await loop.run_in_executor(None, _search_tracks)
+
+    if not results:
+        await event.edit(f"❌ **No results found for:** `{target}`.\nTry including the artist name.")
+        return
+
+    # If auto-download flag was passed, download #1 immediately
+    if auto_download_top:
+        top_track = results[0]
+        await event.edit(f"⚡ **Auto-downloading top match:** `{top_track['title']}`...")
+        await _download_and_send_song(event, top_track["url"], meta_hint=top_track)
+        return
+
+    # Save to interactive session cache
+    SONG_SEARCH_CACHE[event.chat_id] = {
+        "prompt_msg_id": event.message.id,
+        "topic_id": event.topic_id,
+        "time": time.time(),
+        "query": target,
+        "entries": results,
+    }
+
+    number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+    menu_lines = [
+        "🎧 **NovaCore Music Search**",
+        f"🔍 **Query:** `{target}`\n",
+    ]
+
+    for idx, track in enumerate(results):
+        emoji = number_emojis[idx] if idx < len(number_emojis) else f"`[{idx+1}]`"
+        dur = format_duration(track["duration"])
+        menu_lines.append(
+            f"{emoji} **{track['title']}**\n"
+            f"   👤 `{track['uploader']}` • ⏱️ `{dur}`\n"
+        )
+
+    menu_lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━")
+    menu_lines.append("👉 **To download:** Reply with `1` - `5` or send `.song <number>`!")
+    menu_lines.append("💡 *Tip: Use `.song -1 {query}` to auto-download the top match directly.*")
+
+    await event.edit("\n".join(menu_lines))
+
+
+# ==========================================
+# VIDEO / MEDIA DOWNLOAD ENGINE
+# ==========================================
+
+@client_cmd(
+    pattern=r"dl|yt",
+    description="Download media with quality options (.dl [1080|720|480|360|audio|select] <url>)",
+    module="media",
+)
+async def download_cmd(event: SafeMessageWrapper, url: str = ""):
+    raw_args = url.strip()
+    if not raw_args:
+        reply = await event.get_reply_message()
+        if reply and reply.text:
+            raw_args = reply.text.strip()
+
+    if not raw_args:
+        await event.edit(
+            "❌ **Usage:** `.dl <url>` or reply to a link.\n\n"
+            "**Quality Options:**\n"
+            "• `.dl 1080 <url>` — 1080p Full HD\n"
+            "• `.dl 720 <url>` — 720p HD (Recommended)\n"
+            "• `.dl 480 <url>` — 480p Standard\n"
+            "• `.dl 360 <url>` — 360p Data Saver\n"
+            "• `.dl audio <url>` — Extract MP3\n"
+            "• `.dl select <url>` — Choose quality from menu"
+        )
+        return
+
+    # Check if user is replying with .dl 1 - .dl 5 to a quality menu
+    if re.fullmatch(r"[1-5]", raw_args):
+        choice = int(raw_args)
+        cached = DL_SELECT_CACHE.get(event.chat_id)
+        if not cached or (time.time() - cached.get("time", 0)) > 900:
+            await event.edit("❌ **No active quality selector found.** Use `.dl select <url>` first.")
+            return
+
+        resolutions = ["1080", "720", "480", "360", "audio"]
+        chosen_res = resolutions[choice - 1]
+        target_url = cached["url"]
+        DL_SELECT_CACHE.pop(event.chat_id, None)
+        await event.edit(f"⚡ **Downloading in {chosen_res} resolution...**")
+        return await _execute_dl(event, target_url, quality=chosen_res)
+
+    # Parse quality tag from arguments
+    parts = raw_args.split(maxsplit=1)
+    quality = "best"
+    target_str = raw_args
+
+    if parts[0].lower() in ["1080", "720", "480", "360", "audio", "mp3", "select", "menu"]:
+        quality = parts[0].lower()
+        target_str = parts[1] if len(parts) > 1 else ""
+
+    target_url = clean_media_target(target_str)
+    if not target_url:
+        reply = await event.get_reply_message()
+        if reply and reply.text:
+            target_url = clean_media_target(reply.text)
+
+    if not target_url:
+        await event.edit("❌ **Error:** No valid media URL found.")
+        return
+
+    # If user asked for interactive selection
+    if quality in ["select", "menu"]:
+        DL_SELECT_CACHE[event.chat_id] = {
+            "prompt_msg_id": event.message.id,
+            "topic_id": event.topic_id,
+            "time": time.time(),
+            "url": target_url,
+        }
+        await event.edit(
+            f"🎬 **Choose Video Quality:**\n"
+            f"🔗 `{target_url}`\n\n"
+            f"1️⃣ **1080p** — Full HD\n"
+            f"2️⃣ **720p** — HD (Fast & High Quality)\n"
+            f"3️⃣ **480p** — Standard Definition\n"
+            f"4️⃣ **360p** — Data Saver\n"
+            f"5️⃣ **Audio Only** — MP3 320kbps\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👉 Reply with `1` - `5` or send `.dl <number>`!"
+        )
+        return
+
+    await _execute_dl(event, target_url, quality=quality)
+
+
+async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str = "best"):
+    """Downloads video according to specified resolution."""
+    # Route audio quality to MP3 pipeline
+    if quality in ["audio", "mp3"]:
+        await event.edit(f"🎵 **Extracting MP3 Audio:** `{target_url}`...")
+        return await _download_and_send_song(event, target_url)
+
+    await event.edit(f"🔎 **Inspecting media URL ({quality})...**\n`{target_url}`")
 
     loop = asyncio.get_running_loop()
     temp_dir = tempfile.mkdtemp(prefix="novacore_dl_")
@@ -108,7 +502,7 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
                 speed = d.get("speed", 0) or 0
                 pct = f"{int(downloaded / total * 100)}%" if total else "..."
                 text = (
-                    f"📥 **Downloading Media:** `{pct}`\n"
+                    f"📥 **Downloading Media ({quality}):** `{pct}`\n"
                     f"• **Downloaded:** `{format_bytes(downloaded)}` / `{format_bytes(total)}`\n"
                     f"• **Speed:** `{format_bytes(int(speed))}/s`"
                 )
@@ -118,8 +512,21 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
                     pass
 
     ydl_opts = get_base_ydl_opts(temp_dir, ytdl_progress_hook)
+
+    # Resolution format mapping
+    if quality == "1080":
+        fmt = "bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+    elif quality == "720":
+        fmt = "bestvideo[height<=720]+bestaudio/best[height<=720]"
+    elif quality == "480":
+        fmt = "bestvideo[height<=480]+bestaudio/best[height<=480]"
+    elif quality == "360":
+        fmt = "bestvideo[height<=360]+bestaudio/best[height<=360]"
+    else:
+        fmt = "bestvideo*+bestaudio/best"
+
     ydl_opts.update({
-        "format": "bestvideo*+bestaudio/best",
+        "format": fmt,
         "merge_output_format": "mp4",
     })
 
@@ -128,7 +535,7 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 return ydl.extract_info(target_url, download=True)
 
-        await event.edit("⚡ **Streaming media...**")
+        await event.edit(f"⚡ **Streaming media ({quality})...**")
         info = await loop.run_in_executor(None, _extract)
 
         downloaded_files = [
@@ -175,7 +582,7 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
         await event.client.send_file(
             event.chat_id,
             file=file_path,
-            caption=f"🎬 **{title}**\n💾 `{format_bytes(file_size)}`",
+            caption=f"🎬 **{title}**\n💾 `{format_bytes(file_size)}` • 🎯 `{quality}`",
             progress_callback=upload_progress,
             reply_to=event.topic_id,
         )
@@ -206,120 +613,50 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
             pass
 
 
-@client_cmd(
-    pattern="song",
-    description="Search and download audio/song as MP3 (.song <title or url>)",
-    module="media",
-)
-async def song_cmd(event: SafeMessageWrapper, query: str = ""):
-    raw_target = query.strip()
-    if not raw_target:
-        reply = await event.get_reply_message()
-        if reply and reply.text:
-            raw_target = reply.text.strip()
+# ==========================================
+# INTERACTIVE QUICK-SELECTION HANDLER
+# ==========================================
 
-    target = clean_media_target(raw_target) if raw_target.startswith(("http", "[")) else raw_target
-
-    if not target:
-        await event.edit("❌ **Usage:** `.song <song title or URL>`")
+@client_raw_handler(events.NewMessage(outgoing=True, pattern=r"^[1-5]$"))
+async def quick_choice_listener(event: SafeMessageWrapper):
+    """
+    Listens for outgoing single digit replies (1-5) and automatically resolves
+    any pending .song search or .dl quality selection menu!
+    """
+    raw_text = (event.message.text or "").strip()
+    if not re.fullmatch(r"[1-5]", raw_text):
         return
 
-    # For search queries: search YouTube official tracks first, fallback to SoundCloud
-    if target.startswith(("http://", "https://")):
-        search_query = target
-    else:
-        search_query = f"ytsearch1:{target}"
+    choice = int(raw_text)
+    chat_id = event.chat_id
+    now = time.time()
 
-    await event.edit(f"🎵 **Searching and extracting audio for:** `{target}`...")
-
-    loop = asyncio.get_running_loop()
-    temp_dir = tempfile.mkdtemp(prefix="novacore_song_")
-    ydl_opts = get_base_ydl_opts(temp_dir)
-    ydl_opts.update({
-        "format": "bestaudio/best",
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "320",
-            }
-        ],
-    })
-
-    try:
-        def _extract():
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                try:
-                    return ydl.extract_info(search_query, download=True)
-                except Exception as inner_e:
-                    # If YouTube search fails and it wasn't a URL, fallback to SoundCloud search
-                    if not target.startswith(("http://", "https://")):
-                        return ydl.extract_info(f"scsearch1:{target}", download=True)
-                    raise inner_e
-
-        info = await loop.run_in_executor(None, _extract)
-        downloaded = [
-            os.path.join(temp_dir, f)
-            for f in os.listdir(temp_dir)
-            if f.endswith(".mp3")
-        ]
-
-        if not downloaded:
-            await event.edit("❌ No audio track could be extracted.")
+    # 1. Check for active song search menu
+    song_cached = SONG_SEARCH_CACHE.get(chat_id)
+    if song_cached and (now - song_cached.get("time", 0)) <= 300:  # 5 min active window
+        entries = song_cached.get("entries", [])
+        if 1 <= choice <= len(entries):
+            selected = entries[choice - 1]
+            SONG_SEARCH_CACHE.pop(chat_id, None)
+            await event.edit(f"⚡ **Downloading Track #{choice}:** `{selected['title']}`...")
+            await _download_and_send_song(event, selected["url"], meta_hint=selected)
             return
 
-        file_path = downloaded[0]
-        file_size = os.path.getsize(file_path)
+    # 2. Check for active video quality selector menu
+    dl_cached = DL_SELECT_CACHE.get(chat_id)
+    if dl_cached and (now - dl_cached.get("time", 0)) <= 300:  # 5 min active window
+        resolutions = ["1080", "720", "480", "360", "audio"]
+        chosen_res = resolutions[choice - 1]
+        target_url = dl_cached["url"]
+        DL_SELECT_CACHE.pop(chat_id, None)
+        await event.edit(f"⚡ **Downloading in {chosen_res} resolution...**")
+        await _execute_dl(event, target_url, quality=chosen_res)
+        return
 
-        meta_info = info.get("entries", [info])[0] if isinstance(info, dict) and "entries" in info else info
-        title = meta_info.get("title", target) if isinstance(meta_info, dict) else target
-        performer = meta_info.get("uploader", "Unknown Artist") if isinstance(meta_info, dict) else "Unknown Artist"
-        duration = int(meta_info.get("duration", 0)) if isinstance(meta_info, dict) else 0
 
-        await event.edit(f"📤 **Uploading MP3 Audio:** `{format_bytes(file_size)}`...")
-
-        audio_attr = DocumentAttributeAudio(
-            duration=duration,
-            title=str(title)[:64],
-            performer=str(performer)[:64],
-            voice=False,
-        )
-
-        await event.client.send_file(
-            event.chat_id,
-            file=file_path,
-            caption=f"🎵 **{title}**\n👤 *{performer}* • 💾 `{format_bytes(file_size)}`",
-            attributes=[audio_attr],
-            voice_note=False,
-            supports_streaming=True,
-            reply_to=event.topic_id,
-        )
-        await event.delete()
-    except Exception as e:
-        err_msg = str(e)
-        logger.exception("Song download failed: %s", err_msg)
-        if "confirm you’re not a bot" in err_msg or "Sign in to confirm" in err_msg:
-            await event.edit(
-                "🛡️ **YouTube Datacenter Protection**\n\n"
-                "YouTube blocks automated requests from cloud VPS/AWS datacenter IPs.\n\n"
-                "💡 **How to unlock YouTube:**\n"
-                "1. Export your YouTube cookies using `Get cookies.txt locally`.\n"
-                "2. Send that `cookies.txt` file here and reply to it with `.cookies`!\n\n"
-                "*(Tip: Search titles work directly via SoundCloud without cookies)*"
-            )
-        else:
-            await event.edit(f"❌ **Song Download Failed:** `{err_msg}`")
-    finally:
-        for f in os.listdir(temp_dir):
-            try:
-                os.remove(os.path.join(temp_dir, f))
-            except OSError:
-                pass
-        try:
-            os.rmdir(temp_dir)
-        except OSError:
-            pass
-
+# ==========================================
+# CLOUD COOKIES SYSTEM
+# ==========================================
 
 @client_cmd(
     pattern="cookies",
