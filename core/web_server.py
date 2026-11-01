@@ -771,6 +771,8 @@ class WebHealthServer:
                 await db.set_setting("twilio_call_enabled", "true" if data["enabled"] else "false")
             if "voice" in data and data["voice"].strip():
                 await db.set_setting("twilio_voice", data["voice"].strip())
+            if "bin_url" in data:
+                await db.set_setting("twilio_bin_url", data["bin_url"].strip())
 
             ready, status_msg = await is_twilio_ready()
             return web.json_response({

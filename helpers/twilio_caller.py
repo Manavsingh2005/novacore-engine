@@ -89,11 +89,15 @@ def sanitize_url(raw: str) -> str:
 def get_call_url(task_text: str, bin_url: str) -> str:
     """
     Constructs the target voice instructions URL.
-    1. If user configured a custom TwiML Bin (https://handler.twilio.com/twiml/EH...), uses that.
-    2. Otherwise, defaults to NovaCore's built-in 24/7 dynamic TwiML endpoint on EC2!
+    Defaults to NovaCore's built-in 24/7 dynamic TwiML endpoint on EC2.
+    Only uses an external bin_url if explicitly specified and not the deprecated/broken bin.
     """
     clean_bin = sanitize_url(bin_url)
-    target_base = clean_bin if clean_bin else DEFAULT_VOICE_URL
+    if not clean_bin or "EH0a665002bd27717b430e02550d18bd66" in clean_bin:
+        target_base = DEFAULT_VOICE_URL
+    else:
+        target_base = clean_bin
+
     encoded_msg = urllib.parse.quote_plus(task_text.strip())
     sep = "&" if "?" in target_base else "?"
     return f"{target_base}{sep}Message={encoded_msg}&Task={encoded_msg}"
