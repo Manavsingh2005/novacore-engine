@@ -20,6 +20,7 @@ from core.database import db
 logger = logging.getLogger("novacore.twilio_caller")
 
 # Official Twilio documentation voice XML used as fallback if no custom TwiML Bin is configured
+DEFAULT_VOICE_URL = "http://54.206.81.79:7860/api/voice/alarm"
 FALLBACK_VOICE_URL = "https://demo.twilio.com/docs/voice.xml"
 
 
@@ -88,16 +89,14 @@ def sanitize_url(raw: str) -> str:
 def get_call_url(task_text: str, bin_url: str) -> str:
     """
     Constructs the target voice instructions URL.
-    If user provided a TwiML Bin URL (e.g. https://handler.twilio.com/twiml/EH...),
-    passes the task text dynamically via query string parameters for Mustache templating.
-    Otherwise uses Twilio's official voice demo URL.
+    1. If user configured a custom TwiML Bin (https://handler.twilio.com/twiml/EH...), uses that.
+    2. Otherwise, defaults to NovaCore's built-in 24/7 dynamic TwiML endpoint on EC2!
     """
     clean_bin = sanitize_url(bin_url)
-    if clean_bin:
-        encoded_msg = urllib.parse.quote_plus(task_text.strip())
-        sep = "&" if "?" in clean_bin else "?"
-        return f"{clean_bin}{sep}Message={encoded_msg}&Task={encoded_msg}"
-    return FALLBACK_VOICE_URL
+    target_base = clean_bin if clean_bin else DEFAULT_VOICE_URL
+    encoded_msg = urllib.parse.quote_plus(task_text.strip())
+    sep = "&" if "?" in target_base else "?"
+    return f"{target_base}{sep}Message={encoded_msg}&Task={encoded_msg}"
 
 
 async def place_phone_call(task_text: str, custom_to: Optional[str] = None) -> Dict[str, Any]:

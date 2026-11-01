@@ -12,6 +12,7 @@ Features:
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import os
@@ -665,6 +666,8 @@ class WebHealthServer:
         self.app.router.add_get("/api/twilio", self.api_twilio_get_handler)
         self.app.router.add_post("/api/twilio/config", self.api_twilio_config_handler)
         self.app.router.add_post("/api/twilio/test-call", self.api_twilio_test_call_handler)
+        self.app.router.add_get("/api/voice/alarm", self.voice_alarm_twiml_handler)
+        self.app.router.add_post("/api/voice/alarm", self.voice_alarm_twiml_handler)
 
     async def dashboard_handler(self, request: web.Request) -> web.Response:
         uptime_str = format_uptime(self.start_time)
@@ -817,6 +820,37 @@ class WebHealthServer:
             "timestamp": time.time(),
         }
         return web.json_response(data)
+
+    async def voice_alarm_twiml_handler(self, request: web.Request) -> web.Response:
+        """
+        Dynamically serves Twilio Voice XML (TwiML) for phone call alarms.
+        Accepts both GET and POST requests from Twilio.
+        Extracts Message/Task from query string or POST body form.
+        """
+        msg = request.query.get("Message") or request.query.get("Task") or ""
+        if not msg and request.method == "POST":
+            try:
+                post_data = await request.post()
+                msg = post_data.get("Message") or post_data.get("Task") or ""
+            except Exception:
+                pass
+
+        if not msg:
+            msg = "This is your NovaCore alarm reminder. Please check your scheduled task."
+
+        clean_msg = html.escape(msg)
+
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Pause length="1"/>
+    <Say voice="Polly.Aditi" language="en-IN">Attention Manav! This is your NovaCore alarm reminder.</Say>
+    <Pause length="1"/>
+    <Say voice="Polly.Aditi" language="en-IN">{clean_msg}</Say>
+    <Pause length="2"/>
+    <Say voice="Polly.Aditi" language="en-IN">Repeating your reminder: {clean_msg}. Goodbye!</Say>
+    <Hangup/>
+</Response>"""
+        return web.Response(text=twiml, content_type="application/xml")
 
     async def ping_handler(self, request: web.Request) -> web.Response:
         return web.Response(text="pong", content_type="text/plain")
