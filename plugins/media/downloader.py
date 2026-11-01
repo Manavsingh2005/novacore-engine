@@ -94,15 +94,18 @@ def get_base_ydl_opts(temp_dir: str, progress_hook=None) -> dict:
     backup_cookie = os.path.join("data", "cookies_master.txt")
 
     # Auto-restore from backup if master cookie was somehow deleted
-    if not os.path.exists(master_cookie) and os.path.exists(backup_cookie):
-        try:
-            shutil.copyfile(backup_cookie, master_cookie)
-        except Exception:
-            pass
+    if os.path.exists(backup_cookie) and os.path.getsize(backup_cookie) > 0:
+        if not os.path.exists(master_cookie) or os.path.getsize(master_cookie) == 0:
+            try:
+                shutil.copyfile(backup_cookie, master_cookie)
+            except Exception:
+                pass
 
     if os.path.exists(master_cookie) and os.path.getsize(master_cookie) > 0:
         try:
-            isolated_cookie = os.path.join(temp_dir, "isolated_cookies.txt")
+            vault_dir = os.path.join(temp_dir, ".cookie_vault")
+            os.makedirs(vault_dir, exist_ok=True)
+            isolated_cookie = os.path.join(vault_dir, "isolated_cookies.txt")
             shutil.copyfile(master_cookie, isolated_cookie)
             opts["cookiefile"] = isolated_cookie
         except Exception as ce:
@@ -243,15 +246,7 @@ async def _download_and_send_song(
         else:
             await event.edit(f"❌ **Song Download Failed:** `{err_msg}`")
     finally:
-        for f in os.listdir(temp_dir):
-            try:
-                os.remove(os.path.join(temp_dir, f))
-            except OSError:
-                pass
-        try:
-            os.rmdir(temp_dir)
-        except OSError:
-            pass
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @client_cmd(
@@ -413,6 +408,14 @@ async def song_cmd(event: SafeMessageWrapper, query: str = ""):
 # VIDEO / MEDIA DOWNLOAD ENGINE
 # ==========================================
 
+def is_youtube_url(url: str) -> bool:
+    """Determines if a URL is hosted on YouTube."""
+    if not url:
+        return False
+    u = url.lower()
+    return "youtube.com" in u or "youtu.be" in u or "youtube-nocookie.com" in u
+
+
 @client_cmd(
     pattern=r"dl|yt",
     description="Download media with quality menu (.dl <url> or .dl [1080|720|480|360|audio|best] <url>)",
@@ -476,8 +479,13 @@ async def download_cmd(event: SafeMessageWrapper, url: str = ""):
     if explicit_quality:
         return await _execute_dl(event, target_url, quality=explicit_quality)
 
-    # Otherwise, default to showing the interactive quality selection menu!
-    await event.edit(f"🔎 **Inspecting media options...**\n`{target_url}`")
+    # NON-YOUTUBE PLATFORMS (Instagram, TikTok, Twitter/X, Reddit, etc.):
+    # Automatically download at highest available quality without showing quality menu!
+    if not is_youtube_url(target_url):
+        return await _execute_dl(event, target_url, quality="best")
+
+    # YouTube: show interactive quality selection menu!
+    await event.edit(f"🔎 **Inspecting YouTube media options...**\n`{target_url}`")
     loop = asyncio.get_running_loop()
 
     def _probe_info():
@@ -559,15 +567,28 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
 
     ydl_opts = get_base_ydl_opts(temp_dir, ytdl_progress_hook)
 
-    # Resolution format mapping
+    # Resolution format mapping with resilient vertical (Instagram/Shorts/TikTok),
+    # landscape, and single/muxed stream fallbacks
     if quality == "1080":
-        fmt = "bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+        fmt = (
+            "bestvideo[height<=?1080]+bestaudio/bestvideo[width<=?1080]+bestaudio/"
+            "best[height<=?1080]/best[width<=?1080]/bestvideo+bestaudio/best"
+        )
     elif quality == "720":
-        fmt = "bestvideo[height<=720]+bestaudio/best[height<=720]"
+        fmt = (
+            "bestvideo[height<=?720]+bestaudio/bestvideo[width<=?720]+bestaudio/"
+            "best[height<=?720]/best[width<=?720]/bestvideo+bestaudio/best"
+        )
     elif quality == "480":
-        fmt = "bestvideo[height<=480]+bestaudio/best[height<=480]"
+        fmt = (
+            "bestvideo[height<=?480]+bestaudio/bestvideo[width<=?480]+bestaudio/"
+            "best[height<=?480]/best[width<=?480]/bestvideo+bestaudio/best"
+        )
     elif quality == "360":
-        fmt = "bestvideo[height<=360]+bestaudio/best[height<=360]"
+        fmt = (
+            "bestvideo[height<=?360]+bestaudio/bestvideo[width<=?360]+bestaudio/"
+            "best[height<=?360]/best[width<=?360]/bestvideo+bestaudio/best"
+        )
     else:
         fmt = "bestvideo*+bestaudio/best"
 
@@ -584,11 +605,18 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
         await event.edit(f"⚡ **Streaming media ({quality})...**")
         info = await loop.run_in_executor(None, _extract)
 
+        MEDIA_EXTS = (
+            ".mp4", ".mkv", ".webm", ".mov", ".avi", ".flv", ".m4v", ".ts",
+            ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".flac"
+        )
         downloaded_files = [
             os.path.join(temp_dir, f)
             for f in os.listdir(temp_dir)
-            if os.path.isfile(os.path.join(temp_dir, f)) and not f.endswith((".part", ".ytdl"))
+            if os.path.isfile(os.path.join(temp_dir, f))
+            and f.lower().endswith(MEDIA_EXTS)
+            and not f.endswith((".part", ".ytdl"))
         ]
+        downloaded_files.sort(key=lambda x: os.path.getsize(x), reverse=True)
 
         if not downloaded_files:
             await event.edit("❌ **Error:** No media file was produced.")
@@ -656,15 +684,7 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
         else:
             await event.edit(f"❌ **Download Failed:** `{err_msg[:250]}`")
     finally:
-        for f in os.listdir(temp_dir):
-            try:
-                os.remove(os.path.join(temp_dir, f))
-            except OSError:
-                pass
-        try:
-            os.rmdir(temp_dir)
-        except OSError:
-            pass
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 # ==========================================
