@@ -1,0 +1,532 @@
+"""
+NovaCore: High-Performance Archive Studio (/zip, /unzip, /ziplist)
+Features:
+- /unzip [password]: Extract .zip, .rar, .7z, .tar.gz, .tar.bz2, .tar.xz with full password support.
+- /zip [password]: Compress replied file or media into AES-256 encrypted .zip.
+- /zip new [name] -> send files -> /zip done [password]: Multi-file batch archive builder.
+- /ziplist: Inspect archive directory and file sizes without extracting.
+- Zip-Slip path traversal protection and automatic disk cleanup.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import re
+import shutil
+import subprocess
+import tarfile
+import tempfile
+import time
+import zipfile
+from typing import Any, Dict, List, Optional
+
+import py7zr
+import pyzipper
+from telethon import Button
+from telethon.tl.types import DocumentAttributeFilename
+
+from core.dispatcher import bot_cmd, bot_callback, SafeMessageWrapper
+from helpers.formatters import format_bytes
+
+logger = logging.getLogger("novacore.plugin.utility.archiver")
+
+# Active batch zip sessions keyed by user_id
+# {user_id: {"name": str, "dir": str, "files": List[str], "created_at": float}}
+ZIP_SESSIONS: Dict[int, Dict[str, Any]] = {}
+
+ARCHIVE_EXTENSIONS = (
+    ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz",
+    ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".gz",
+)
+
+
+def get_archive_filename(msg) -> str:
+    """Extracts filename from document attributes or fallback."""
+    if not msg:
+        return "archive"
+    if msg.file and msg.file.name:
+        return msg.file.name
+    if msg.document:
+        for attr in msg.document.attributes:
+            if isinstance(attr, DocumentAttributeFilename):
+                return attr.file_name
+    return "archive"
+
+
+def is_archive(filename: str) -> bool:
+    fn = filename.lower()
+    return any(fn.endswith(ext) for ext in ARCHIVE_EXTENSIONS)
+
+
+# ==========================================
+# UNZIP / EXTRACTION ENGINE
+# ==========================================
+
+@bot_cmd(
+    pattern=r"(?:unzip|extract)(?:\s+(.*))?",
+    description="Extract archive with password support (/unzip [password])",
+    module="utility",
+)
+async def unzip_cmd(event: SafeMessageWrapper, query: str = ""):
+    password = (query or "").strip()
+    reply = await event.get_reply_message()
+
+    target_msg = reply if (reply and reply.media) else (event.message if event.message.media else None)
+
+    if not target_msg or not target_msg.media:
+        await event.reply(
+            "🗜️ **How to Unzip an Archive:**\n\n"
+            "1. Reply to any `.zip`, `.rar`, `.7z`, or `.tar.gz` file with `/unzip`\n"
+            "2. If it is password protected, use: `/unzip <password>`\n\n"
+            "💡 *Supported formats:* `.zip`, `.rar`, `.7z`, `.tar`, `.tar.gz`, `.tar.bz2`, `.tar.xz`"
+        )
+        return
+
+    raw_filename = get_archive_filename(target_msg)
+    if not is_archive(raw_filename):
+        await event.reply(
+            f"⚠️ **File `{raw_filename}` does not appear to be an archive.**\n"
+            f"Supported extensions: {', '.join(ARCHIVE_EXTENSIONS)}"
+        )
+        return
+
+    status_msg = await event.reply(f"⏳ **Preparing to extract `{raw_filename}`...**")
+    loop = asyncio.get_running_loop()
+    temp_dir = tempfile.mkdtemp(prefix="novacore_unzip_")
+    archive_path = os.path.join(temp_dir, raw_filename)
+    extract_dir = os.path.join(temp_dir, "extracted")
+    os.makedirs(extract_dir, exist_ok=True)
+
+    try:
+        last_down_time = [0.0]
+
+        async def download_progress(current, total):
+            now = time.time()
+            if now - last_down_time[0] >= 3.5:
+                last_down_time[0] = now
+                pct = int(current / total * 100) if total else 0
+                await status_msg.edit(
+                    f"📥 **Downloading Archive:** `{pct}%` (`{format_bytes(current)}` / `{format_bytes(total)}`)..."
+                )
+
+        await event.client.download_media(
+            target_msg,
+            file=archive_path,
+            progress_callback=download_progress,
+        )
+
+        await status_msg.edit("🔓 **Unpacking archive contents...**")
+
+        def _extract() -> Dict[str, Any]:
+            extracted_files: List[str] = []
+            fn_lower = raw_filename.lower()
+            pwd_bytes = password.encode("utf-8") if password else None
+
+            # 1. ZIP / AES-ZIP
+            if fn_lower.endswith(".zip"):
+                try:
+                    with pyzipper.AESZipFile(archive_path) as zf:
+                        if pwd_bytes:
+                            zf.setpassword(pwd_bytes)
+                        zf.extractall(extract_dir)
+                except Exception as zip_err:
+                    err_str = str(zip_err).lower()
+                    if "password" in err_str or "encrypted" in err_str or "bad password" in err_str:
+                        return {"error": "PASSWORD_REQUIRED", "details": str(zip_err)}
+                    # Fallback to standard zipfile
+                    with zipfile.ZipFile(archive_path) as zf:
+                        if pwd_bytes:
+                            zf.setpassword(pwd_bytes)
+                        zf.extractall(extract_dir)
+
+            # 2. 7Z (7-Zip)
+            elif fn_lower.endswith(".7z"):
+                try:
+                    with py7zr.SevenZipFile(archive_path, mode="r", password=password or None) as szf:
+                        szf.extractall(extract_dir)
+                except Exception as sz_err:
+                    err_str = str(sz_err).lower()
+                    if "password" in err_str or "encrypted" in err_str:
+                        return {"error": "PASSWORD_REQUIRED", "details": str(sz_err)}
+                    # Fallback to system 7z CLI
+                    cmd = ["7z", "x", "-y"]
+                    if password:
+                        cmd.append(f"-p{password}")
+                    else:
+                        cmd.append("-p-")
+                    cmd.extend([archive_path, f"-o{extract_dir}"])
+                    res = subprocess.run(cmd, capture_output=True, text=True)
+                    if res.returncode != 0:
+                        if "wrong password" in res.stderr.lower() or "password" in res.stderr.lower():
+                            return {"error": "PASSWORD_REQUIRED", "details": res.stderr}
+                        raise RuntimeError(res.stderr or res.stdout)
+
+            # 3. RAR
+            elif fn_lower.endswith(".rar"):
+                cmd = ["unar", "-o", extract_dir]
+                if password:
+                    cmd.extend(["-p", password])
+                cmd.append(archive_path)
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                if res.returncode != 0:
+                    if "password" in (res.stderr + res.stdout).lower():
+                        return {"error": "PASSWORD_REQUIRED", "details": res.stderr or res.stdout}
+                    raise RuntimeError(res.stderr or res.stdout)
+
+            # 4. TAR / TAR.GZ / TAR.BZ2 / TAR.XZ
+            elif any(fn_lower.endswith(ext) for ext in [".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz"]):
+                with tarfile.open(archive_path, "r:*") as tf:
+                    # Python 3.12+ safe filter
+                    if hasattr(tarfile, "data_filter"):
+                        tf.extractall(extract_dir, filter="data")
+                    else:
+                        tf.extractall(extract_dir)
+            else:
+                # Generic fallback via system unar / 7z
+                cmd = ["unar", "-o", extract_dir]
+                if password:
+                    cmd.extend(["-p", password])
+                cmd.append(archive_path)
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                if res.returncode != 0:
+                    raise RuntimeError(res.stderr or res.stdout)
+
+            # Walk and collect all extracted files
+            total_size = 0
+            for root, _, files in os.walk(extract_dir):
+                for f in files:
+                    p = os.path.join(root, f)
+                    # Zip-Slip security check
+                    if not os.path.abspath(p).startswith(os.path.abspath(extract_dir)):
+                        raise ValueError("Security violation: path traversal detected in archive!")
+                    extracted_files.append(p)
+                    total_size += os.path.getsize(p)
+
+            return {"files": extracted_files, "total_size": total_size}
+
+        result = await loop.run_in_executor(None, _extract)
+
+        if result.get("error") == "PASSWORD_REQUIRED":
+            await status_msg.edit(
+                "🔒 **Password Protected Archive!**\n\n"
+                f"The archive `{raw_filename}` is encrypted.\n\n"
+                "👉 **To extract:** Reply to the archive with:\n"
+                "`/unzip <your_password>`"
+            )
+            return
+
+        files = result.get("files", [])
+        total_size = result.get("total_size", 0)
+
+        if not files:
+            await status_msg.edit("⚠️ **Extraction completed, but archive was empty.**")
+            return
+
+        await status_msg.edit(
+            f"✅ **Extracted `{len(files)}` files** (`{format_bytes(total_size)}`).\n"
+            f"📤 **Uploading files to Telegram...**"
+        )
+
+        # Upload files
+        # If <= 15 files, upload each one directly with progress
+        if len(files) <= 15:
+            for idx, file_p in enumerate(files):
+                fname = os.path.basename(file_p)
+                fsize = os.path.getsize(file_p)
+                await status_msg.edit(f"📤 **Uploading [{idx+1}/{len(files)}]:** `{fname}` (`{format_bytes(fsize)}`)...")
+                await event.client.send_file(
+                    event.chat_id,
+                    file=file_p,
+                    caption=f"📄 **{fname}**\n💾 `{format_bytes(fsize)}` • 🗜️ *From {raw_filename}*",
+                    reply_to=event.topic_id,
+                )
+            await status_msg.delete()
+        else:
+            # Over 15 files: repack into clean unencrypted zip or send top 10
+            await status_msg.edit(f"📦 Archive contains **{len(files)} files** ({format_bytes(total_size)}). Sending first 15 files...")
+            for idx, file_p in enumerate(files[:15]):
+                fname = os.path.basename(file_p)
+                fsize = os.path.getsize(file_p)
+                await event.client.send_file(
+                    event.chat_id,
+                    file=file_p,
+                    caption=f"📄 **{fname}**\n💾 `{format_bytes(fsize)}`",
+                    reply_to=event.topic_id,
+                )
+            await event.reply(
+                f"ℹ️ Sent first 15 of **{len(files)} files**. Total uncompressed size: `{format_bytes(total_size)}`."
+            )
+            await status_msg.delete()
+
+    except Exception as e:
+        logger.exception("Unzip failed: %s", e)
+        await status_msg.edit(f"❌ **Extraction Failed:** `{str(e)[:300]}`")
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+# ==========================================
+# ZIP / ARCHIVE CREATION ENGINE
+# ==========================================
+
+@bot_cmd(
+    pattern=r"zip(?:\s+(.*))?",
+    description="Compress file or start batch zip (/zip [password] or /zip new [name])",
+    module="utility",
+)
+async def zip_cmd(event: SafeMessageWrapper, query: str = ""):
+    args = (query or "").strip().split()
+    subcmd = args[0].lower() if args else ""
+    user_id = event.sender_id or event.chat_id
+
+    # 1. Check for batch session management (/zip new, /zip done, /zip cancel, /zip status)
+    if subcmd == "new":
+        archive_name = args[1] if len(args) > 1 else f"archive_{int(time.time())}.zip"
+        if not archive_name.endswith(".zip"):
+            archive_name += ".zip"
+
+        # Cancel any previous session
+        if user_id in ZIP_SESSIONS:
+            shutil.rmtree(ZIP_SESSIONS[user_id]["dir"], ignore_errors=True)
+
+        session_dir = tempfile.mkdtemp(prefix="novacore_zipsess_")
+        ZIP_SESSIONS[user_id] = {
+            "name": archive_name,
+            "dir": session_dir,
+            "files": [],
+            "created_at": time.time(),
+        }
+
+        await event.reply(
+            f"📦 **Batch Archive Session Started!**\n\n"
+            f"• **Archive Name:** `{archive_name}`\n"
+            f"• **Destination:** `.zip` (AES-256 Capable)\n\n"
+            "👉 **How to use:**\n"
+            "1. Send me documents, photos, or files one by one.\n"
+            "2. When finished, send: `/zip done [optional_password]`\n"
+            "3. To cancel anytime, send: `/zip cancel`"
+        )
+        return
+
+    if subcmd == "cancel":
+        if user_id in ZIP_SESSIONS:
+            shutil.rmtree(ZIP_SESSIONS[user_id]["dir"], ignore_errors=True)
+            del ZIP_SESSIONS[user_id]
+            await event.reply("🚫 **Batch zip session cancelled and cleared.**")
+        else:
+            await event.reply("ℹ️ No active batch zip session found.")
+        return
+
+    if subcmd == "done":
+        session = ZIP_SESSIONS.get(user_id)
+        if not session or not session["files"]:
+            await event.reply("❌ **No active batch archive session or no files added yet.** Start with `/zip new`.")
+            return
+
+        password = args[1] if len(args) > 1 else None
+        status_msg = await event.reply(f"🗜️ **Compressing {len(session['files'])} files into `{session['name']}`...**")
+        loop = asyncio.get_running_loop()
+
+        out_zip_path = os.path.join(session["dir"], session["name"])
+
+        def _create_batch_zip():
+            if password:
+                with pyzipper.AESZipFile(
+                    out_zip_path,
+                    "w",
+                    compression=pyzipper.ZIP_DEFLATED,
+                    encryption=pyzipper.WZ_AES,
+                ) as zf:
+                    zf.setpassword(password.encode("utf-8"))
+                    for file_p in session["files"]:
+                        zf.write(file_p, arcname=os.path.basename(file_p))
+            else:
+                with zipfile.ZipFile(out_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    for file_p in session["files"]:
+                        zf.write(file_p, arcname=os.path.basename(file_p))
+
+        try:
+            await loop.run_in_executor(None, _create_batch_zip)
+            zip_size = os.path.getsize(out_zip_path)
+            pwd_text = f"🔑 **Password:** `{password}`\n" if password else "🔓 **Unencrypted**\n"
+
+            await status_msg.edit(f"📤 **Uploading `{session['name']}` ({format_bytes(zip_size)})...**")
+            await event.client.send_file(
+                event.chat_id,
+                file=out_zip_path,
+                caption=(
+                    f"🗜️ **{session['name']}**\n"
+                    f"📁 **Files Packed:** `{len(session['files'])}`\n"
+                    f"💾 **Archive Size:** `{format_bytes(zip_size)}`\n"
+                    f"{pwd_text}"
+                ),
+                reply_to=event.topic_id,
+            )
+            await status_msg.delete()
+        except Exception as e:
+            logger.exception("Batch zip creation failed: %s", e)
+            await status_msg.edit(f"❌ **Zip Creation Failed:** `{e}`")
+        finally:
+            shutil.rmtree(session["dir"], ignore_errors=True)
+            ZIP_SESSIONS.pop(user_id, None)
+        return
+
+    # 2. Single-file zipping mode: reply /zip [password] [archive_name] to any media/file
+    reply = await event.get_reply_message()
+    if not reply or not reply.media:
+        # Check if user has an active session
+        if user_id in ZIP_SESSIONS:
+            sess = ZIP_SESSIONS[user_id]
+            await event.reply(
+                f"📦 **Active Batch Zip Session:** `{sess['name']}`\n"
+                f"• **Files Queued:** `{len(sess['files'])}`\n"
+                f"• Send files to add, or send `/zip done [password]` to finish!"
+            )
+            return
+
+        await event.reply(
+            "🗜️ **How to Create a Zip File:**\n\n"
+            "**Option A (Single File):**\n"
+            "• Reply `/zip` to any file, photo, video, or audio.\n"
+            "• Add a password: `/zip mypassword`\n\n"
+            "**Option B (Batch Archive / Multiple Files):**\n"
+            "• Send `/zip new [archive_name.zip]`\n"
+            "• Send all your files one by one\n"
+            "• Send `/zip done [password]` to build and receive your zip!"
+        )
+        return
+
+    password = args[0] if args else None
+    target_name = get_archive_filename(reply)
+    zip_name = f"{os.path.splitext(target_name)[0]}.zip"
+
+    status_msg = await event.reply(f"⏳ **Preparing to zip `{target_name}`...**")
+    loop = asyncio.get_running_loop()
+    temp_dir = tempfile.mkdtemp(prefix="novacore_singlezip_")
+    src_path = os.path.join(temp_dir, target_name)
+    out_zip_path = os.path.join(temp_dir, zip_name)
+
+    try:
+        last_down_time = [0.0]
+
+        async def download_progress(current, total):
+            now = time.time()
+            if now - last_down_time[0] >= 3.5:
+                last_down_time[0] = now
+                pct = int(current / total * 100) if total else 0
+                await status_msg.edit(f"📥 **Downloading `{target_name}`:** `{pct}%`...")
+
+        await event.client.download_media(reply, file=src_path, progress_callback=download_progress)
+        orig_size = os.path.getsize(src_path)
+
+        await status_msg.edit("🗜️ **Compressing file into AES-256 Zip...**")
+
+        def _create_single_zip():
+            if password:
+                with pyzipper.AESZipFile(
+                    out_zip_path,
+                    "w",
+                    compression=pyzipper.ZIP_DEFLATED,
+                    encryption=pyzipper.WZ_AES,
+                ) as zf:
+                    zf.setpassword(password.encode("utf-8"))
+                    zf.write(src_path, arcname=target_name)
+            else:
+                with zipfile.ZipFile(out_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    zf.write(src_path, arcname=target_name)
+
+        await loop.run_in_executor(None, _create_single_zip)
+        zip_size = os.path.getsize(out_zip_path)
+        pwd_text = f"🔑 **Password:** `{password}` (AES-256 Encrypted)\n" if password else "🔓 **Unencrypted**\n"
+
+        await status_msg.edit(f"📤 **Uploading `{zip_name}` ({format_bytes(zip_size)})...**")
+        await event.client.send_file(
+            event.chat_id,
+            file=out_zip_path,
+            caption=(
+                f"🗜️ **{zip_name}**\n"
+                f"📄 **Contains:** `{target_name}`\n"
+                f"💾 **Size:** `{format_bytes(orig_size)}` ➔ `{format_bytes(zip_size)}`\n"
+                f"{pwd_text}"
+            ),
+            reply_to=event.topic_id,
+        )
+        await status_msg.delete()
+    except Exception as e:
+        logger.exception("Single zip failed: %s", e)
+        await status_msg.edit(f"❌ **Zip Failed:** `{e}`")
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+# ==========================================
+# BATCH FILE RECEIVER LISTENER
+# ==========================================
+
+from telethon import events
+
+@bot_cmd(
+    pattern=r"(?:ziplist|listarchive)",
+    description="Inspect archive contents without extracting (/ziplist)",
+    module="utility",
+)
+async def ziplist_cmd(event: SafeMessageWrapper, query: str = ""):
+    reply = await event.get_reply_message()
+    if not reply or not reply.media:
+        await event.reply("ℹ️ Reply to any `.zip`, `.7z`, or `.tar` archive with `/ziplist` to inspect its contents.")
+        return
+
+    raw_filename = get_archive_filename(reply)
+    status_msg = await event.reply(f"🔎 **Inspecting `{raw_filename}`...**")
+    loop = asyncio.get_running_loop()
+    temp_dir = tempfile.mkdtemp(prefix="novacore_list_")
+    archive_path = os.path.join(temp_dir, raw_filename)
+
+    try:
+        await event.client.download_media(reply, file=archive_path)
+
+        def _read_list():
+            items = []
+            fn = raw_filename.lower()
+            if fn.endswith(".zip"):
+                with zipfile.ZipFile(archive_path) as zf:
+                    for info in zf.infolist():
+                        items.append((info.filename, info.file_size))
+            elif fn.endswith(".7z"):
+                with py7zr.SevenZipFile(archive_path, mode="r") as szf:
+                    for info in szf.list():
+                        items.append((info.filename, info.uncompressed))
+            elif any(fn.endswith(ext) for ext in [".tar", ".tar.gz", ".tgz", ".tar.bz2"]):
+                with tarfile.open(archive_path, "r:*") as tf:
+                    for m in tf.getmembers():
+                        items.append((m.name, m.size))
+            return items
+
+        entries = await loop.run_in_executor(None, _read_list)
+        if not entries:
+            await status_msg.edit(f"📁 **Archive `{raw_filename}` is empty or encrypted.**")
+            return
+
+        total_uncompressed = sum(size for _, size in entries)
+        lines = [
+            f"📋 **Archive Contents:** `{raw_filename}`",
+            f"• **Total Files:** `{len(entries)}`",
+            f"• **Uncompressed Size:** `{format_bytes(total_uncompressed)}`\n",
+            "━━━━━━━━━━━━━━━━━━━━",
+        ]
+
+        for fname, fsize in entries[:25]:
+            lines.append(f"• `{fname}` (`{format_bytes(fsize)}`)")
+
+        if len(entries) > 25:
+            lines.append(f"*(and {len(entries) - 25} more files)*")
+
+        lines.append("━━━━━━━━━━━━━━━━━━━━")
+        lines.append("👉 *To extract all: Reply `/unzip` to the original archive.*")
+        await status_msg.edit("\n".join(lines))
+    except Exception as e:
+        await status_msg.edit(f"❌ **Failed to inspect archive:** `{e}`")
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)

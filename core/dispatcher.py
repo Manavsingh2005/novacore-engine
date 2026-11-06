@@ -1,7 +1,7 @@
 """
-NovaCore: Dynamic Command Dispatcher & Forum Topic Router
-Handles command registration, prefix matching, outgoing message verification,
-Forum topic-thread routing, and Guardian Shield execution.
+NovaCore: Telegram Utility Bot Command & Callback Dispatcher
+Handles command routing (/command and .command), inline keyboard callback queries,
+incoming message wrappers, topic preservation, and rate limiting.
 """
 
 from __future__ import annotations
@@ -22,59 +22,72 @@ from core.ratelimiter import guardian
 
 logger = logging.getLogger("novacore.dispatcher")
 
-# Registry for dynamic .help reflection
+# Registry for dynamic /help reflection
 COMMAND_REGISTRY: Dict[str, Dict[str, Any]] = {}
 
 
 class SafeMessageWrapper:
     """
-    Wraps Telethon Message events to guarantee:
-    1. Forum topic persistence (reply_to_msg_id and top_msg_id routing).
-    2. Outbound pacing and FloodWait circuit-breaking via Guardian Shield.
-    3. Throttled edits for progress bars.
+    Wraps Telethon Message & Callback events to guarantee:
+    1. Unified edit/reply/respond methods.
+    2. Forum topic persistence.
+    3. Guardian Shield rate limiting and FloodWait protection.
     """
 
-    def __init__(self, raw_event: events.NewMessage.Event):
+    def __init__(self, raw_event: Any):
         self._event = raw_event
-        self.message: Message = raw_event.message
         self.client = raw_event.client
         self.chat_id = raw_event.chat_id
-        self.sender_id = raw_event.sender_id
-        self.is_private = raw_event.is_private
-        self.is_group = raw_event.is_group
-        self.is_channel = raw_event.is_channel
+        self.sender_id = getattr(raw_event, "sender_id", None)
+        self.is_private = getattr(raw_event, "is_private", True)
+        self.is_group = getattr(raw_event, "is_group", False)
+        self.is_channel = getattr(raw_event, "is_channel", False)
 
-        # Extract Forum Topic ID (Telegram Modernity)
+        # Distinguish between NewMessage and CallbackQuery
+        if hasattr(raw_event, "message") and isinstance(raw_event.message, Message):
+            self.message: Message = raw_event.message
+        elif isinstance(raw_event, Message):
+            self.message: Message = raw_event
+        else:
+            self.message = getattr(raw_event, "message", None)
+
+        # Extract Forum Topic ID
         self.topic_id: Optional[int] = None
-        if self.message.reply_to:
+        if self.message and self.message.reply_to:
             self.topic_id = (
                 getattr(self.message.reply_to, "reply_to_top_id", None)
                 or self.message.reply_to.reply_to_msg_id
             )
 
     async def edit(self, text: str, **kwargs: Any) -> Any:
-        """Edits the command message safely through Guardian Shield."""
+        """Edits the message if outgoing or callback, otherwise replies."""
         async def _do_edit():
-            return await self.message.edit(text, **kwargs)
+            if isinstance(self._event, events.CallbackQuery.Event):
+                return await self._event.edit(text, **kwargs)
+            if self.message and getattr(self.message, "out", False):
+                return await self.message.edit(text, **kwargs)
+            # Incoming message: reply with a new message instead of failing
+            if self.topic_id and "reply_to" not in kwargs:
+                kwargs["reply_to"] = self.topic_id
+            if hasattr(self._event, "reply"):
+                return await self._event.reply(text, **kwargs)
+            return await self.client.send_message(self.chat_id, text, **kwargs)
 
         return await guardian.execute_safe(_do_edit)
 
     async def reply(self, text: str, **kwargs: Any) -> Any:
-        """Replies within the exact same Forum topic and paces through Guardian Shield."""
+        """Replies to the message within the exact same Forum topic."""
         if self.topic_id and "reply_to" not in kwargs:
             kwargs["reply_to"] = self.topic_id
 
         async def _do_reply():
-            return await self._event.reply(text, **kwargs)
+            if hasattr(self._event, "reply"):
+                return await self._event.reply(text, **kwargs)
+            elif self.message:
+                return await self.message.reply(text, **kwargs)
+            return await self.client.send_message(self.chat_id, text, **kwargs)
 
         return await guardian.execute_safe(_do_reply)
-
-    async def delete(self) -> Any:
-        """Deletes the message through Guardian Shield."""
-        async def _do_delete():
-            return await self.message.delete()
-
-        return await guardian.execute_safe(_do_delete)
 
     async def respond(self, text: str, **kwargs: Any) -> Any:
         """Responds in chat through Guardian Shield."""
@@ -82,37 +95,53 @@ class SafeMessageWrapper:
             kwargs["reply_to"] = self.topic_id
 
         async def _do_respond():
-            return await self._event.respond(text, **kwargs)
+            if hasattr(self._event, "respond"):
+                return await self._event.respond(text, **kwargs)
+            return await self.client.send_message(self.chat_id, text, **kwargs)
 
         return await guardian.execute_safe(_do_respond)
 
+    async def delete(self) -> Any:
+        """Deletes the message through Guardian Shield."""
+        async def _do_delete():
+            if self.message:
+                return await self.message.delete()
+
+        return await guardian.execute_safe(_do_delete)
+
+    async def get_reply_message(self) -> Optional[Message]:
+        """Retrieves the replied message."""
+        if self.message and hasattr(self.message, "get_reply_message"):
+            return await self.message.get_reply_message()
+        if hasattr(self._event, "get_reply_message"):
+            return await self._event.get_reply_message()
+        return None
+
     def __getattr__(self, item: str) -> Any:
+        if self.message and hasattr(self.message, item):
+            return getattr(self.message, item)
         return getattr(self._event, item)
 
 
-def client_cmd(
+def bot_cmd(
     pattern: str,
     description: str = "No description provided.",
     module: str = "general",
-    prefix: Optional[str] = None,
 ):
     """
-    Decorator for automation engine commands.
-    Ensures outgoing execution only, regex command matching, topic binding,
-    and automatic error containment.
+    Decorator for bot commands. Listens on incoming messages.
+    Supports /command, .command, and /command@botname.
     """
-    pfx = re.escape(prefix or settings.COMMAND_PREFIX)
     clean_pat = pattern.strip("^$")
-    # If the author included trailing argument regex like (?:\s+...) or \s+, strip that out for base command matching
     base_cmd_pat = re.sub(r"\(\?:\s*\\s\+.*", "", clean_pat).strip()
     if not base_cmd_pat:
         base_cmd_pat = clean_pat
 
-    full_pattern = rf"^{pfx}(?:{base_cmd_pat})(?:$|\s+([\s\S]*))"
-    regex = re.compile(full_pattern, flags=re.DOTALL)
-    trigger_regex = re.compile(rf"^{pfx}(?:{base_cmd_pat})(?:\s+|$)", flags=re.DOTALL)
+    # Matches /cmd or .cmd with optional @botusername and arguments
+    full_pattern = rf"^[/.](?:{base_cmd_pat})(?:@\w+)?(?:$|\s+([\s\S]*))"
+    regex = re.compile(full_pattern, flags=re.DOTALL | re.IGNORECASE)
+    trigger_regex = re.compile(rf"^[/.](?:{base_cmd_pat})(?:@\w+)?(?:\s+|$)", flags=re.DOTALL | re.IGNORECASE)
 
-    # Extract clean display command names from pattern
     clean_candidates = re.findall(r"\b[a-zA-Z0-9_-]+\b", base_cmd_pat)
     cmd_name = clean_candidates[0] if clean_candidates else base_cmd_pat.replace("$", "").strip()
 
@@ -127,8 +156,8 @@ def client_cmd(
         param_count = len(sig.parameters)
 
         async def wrapper(event: events.NewMessage.Event):
-            # Only process outgoing messages sent by the account owner
-            if not event.out:
+            # Process incoming messages sent to the bot
+            if getattr(event, "out", False):
                 return
 
             text = event.text or ""
@@ -145,10 +174,10 @@ def client_cmd(
                 else:
                     await func(wrapped_event)
             except Exception as e:
-                logger.exception("Error executing command %s: %s", cmd_name, e)
+                logger.exception("Error executing bot command %s: %s", cmd_name, e)
                 try:
-                    await wrapped_event.edit(
-                        f"❌ **Error executing `{cmd_name}`:**\n`{str(e)}`"
+                    await wrapped_event.reply(
+                        f"❌ **Error executing `/{cmd_name}`:**\n`{str(e)}`"
                     )
                 except Exception:
                     pass
@@ -156,21 +185,60 @@ def client_cmd(
         wrapper.__name__ = func.__name__
         wrapper.__doc__ = description
         wrapper._is_novacore_cmd = True
-        wrapper._event_builder = events.NewMessage(outgoing=True, pattern=regex)
+        wrapper._event_builder = events.NewMessage(incoming=True, pattern=regex)
+        return wrapper
+
+    return decorator
+
+
+# Backward-compatibility alias so existing plugins continue to load
+client_cmd = bot_cmd
+
+
+def bot_callback(pattern: Optional[str | re.Pattern] = None):
+    """
+    Decorator for inline keyboard callback query handlers.
+    """
+    if isinstance(pattern, str):
+        regex = re.compile(pattern)
+    elif pattern is None:
+        regex = None
+    else:
+        regex = pattern
+
+    def decorator(func: Callable):
+        sig = inspect.signature(func)
+        param_count = len(sig.parameters)
+
+        async def wrapper(event: events.CallbackQuery.Event):
+            wrapped_event = SafeMessageWrapper(event)
+            try:
+                if param_count >= 1:
+                    await func(wrapped_event)
+                else:
+                    await func()
+            except Exception as e:
+                logger.exception("Error executing callback handler %s: %s", func.__name__, e)
+                try:
+                    await event.answer(f"Error: {e}", alert=True)
+                except Exception:
+                    pass
+
+        wrapper.__name__ = func.__name__
+        wrapper._is_novacore_cmd = True
+        wrapper._event_builder = events.CallbackQuery(pattern=regex)
         return wrapper
 
     return decorator
 
 
 def client_raw_handler(event_builder):
-    """Decorator for custom raw Telethon event builders (e.g. interactive selection, replies)."""
+    """Decorator for custom raw Telethon event builders."""
     def decorator(func):
         sig = inspect.signature(func)
         param_count = len(sig.parameters)
 
         async def wrapper(event):
-            if not getattr(event, "out", True):
-                return
             wrapped = SafeMessageWrapper(event)
             try:
                 if param_count >= 1:
@@ -209,7 +277,6 @@ def load_all_plugins(client: Any) -> int:
             else:
                 mod = importlib.import_module(module_name)
 
-            # Register any decorated commands with Telethon client
             for attr_name in dir(mod):
                 attr = getattr(mod, attr_name)
                 if callable(attr) and getattr(attr, "_is_novacore_cmd", False):

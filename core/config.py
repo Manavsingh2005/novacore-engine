@@ -22,10 +22,10 @@ class Settings(BaseSettings):
     )
 
     # --- Telegram Credentials ---
-    API_ID: int = Field(default=0, description="Telegram API ID from my.telegram.org")
-    API_HASH: str = Field(default="", description="Telegram API Hash from my.telegram.org")
-    STRING_SESSION: str = Field(default="", description="Telethon StringSession for user account")
-    BOT_TOKEN: Optional[str] = Field(default=None, description="Bot API token for Assistant Bot")
+    API_ID: int = Field(default=30941610, description="Telegram API ID from my.telegram.org")
+    API_HASH: str = Field(default="d25c56097b9f5e36899602b282f089c7", description="Telegram API Hash from my.telegram.org")
+    STRING_SESSION: Optional[str] = Field(default="", description="Optional legacy session string")
+    BOT_TOKEN: str = Field(default="8921228078:AAEsgjn8j_SXmftO_0aZau4_C7BsTe47f1M", description="Bot API token for Telegram Utility Bot")
 
     # --- AI & Multi-Key Pool ---
     GROQ_API_KEYS_RAW: str = Field(
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     )
 
     # --- Command & Bot Customization ---
-    COMMAND_PREFIX: str = Field(default=".", description="Command trigger prefix")
+    COMMAND_PREFIX: str = Field(default="/", description="Command trigger prefix")
     DATABASE_PATH: str = Field(
         default="data/novacore.db",
         description="Local SQLite database file path",
