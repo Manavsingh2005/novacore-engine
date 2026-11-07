@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+import json
 import logging
 import os
 import re
@@ -23,6 +24,7 @@ import shutil
 import tempfile
 import time
 from typing import Any, Dict, List, Optional
+import urllib.request
 import yt_dlp
 from telethon import Button, events
 from telethon.tl.types import DocumentAttributeAudio, DocumentAttributeVideo
@@ -71,6 +73,93 @@ def is_youtube_url(url: str) -> bool:
         return False
     u = url.lower()
     return "youtube.com" in u or "youtu.be" in u or "youtube-nocookie.com" in u
+
+
+def is_pinterest_url(url: str) -> bool:
+    """Determines if a URL is hosted on Pinterest or pin.it."""
+    if not url:
+        return False
+    u = url.lower()
+    return "pinterest.com" in u or "pin.it" in u
+
+
+def is_direct_image_url(url: str) -> bool:
+    """Determines if a URL points directly to an image file."""
+    if not url:
+        return False
+    clean = url.split("?")[0].lower()
+    return clean.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif"))
+
+
+def extract_pinterest_media(url: str) -> Optional[Dict[str, Any]]:
+    """Extracts original image or video from Pinterest pins."""
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                )
+            }
+        )
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+
+        # Search for pins in __PWS_INITIAL_PROPS__ or __PWS_DATA__
+        for marker in ['id="__PWS_INITIAL_PROPS__"', 'id="__PWS_DATA__"']:
+            idx = html.find(marker)
+            if idx == -1:
+                continue
+            end = html.find('</script>', idx)
+            snippet = html[idx:end]
+            json_str = snippet[snippet.find('>') + 1:]
+            try:
+                data = json.loads(json_str)
+            except Exception:
+                continue
+
+            def find_pin_info(obj):
+                if isinstance(obj, dict):
+                    if "images" in obj and ("orig" in obj["images"] or "originals" in obj["images"] or "736x" in obj["images"]):
+                        return obj
+                    for v in obj.values():
+                        res = find_pin_info(v)
+                        if res:
+                            return res
+                elif isinstance(obj, list):
+                    for item in obj:
+                        res = find_pin_info(item)
+                        if res:
+                            return res
+                return None
+
+            pin = find_pin_info(data)
+            if pin:
+                title = pin.get("title") or pin.get("grid_title") or "Pinterest Media"
+                # Check for video first
+                videos = pin.get("videos")
+                if videos and isinstance(videos, dict):
+                    v_list = videos.get("video_list", {})
+                    for v_qual in ["V_720P", "V_EXP7", "V_480P", "V_HLSV4"]:
+                        if v_qual in v_list and "url" in v_list[v_qual]:
+                            return {"type": "video", "url": v_list[v_qual]["url"], "title": title}
+
+                # Image extraction
+                imgs = pin.get("images", {})
+                for key in ["orig", "originals", "750x", "736x"]:
+                    if key in imgs and "url" in imgs[key]:
+                        return {"type": "image", "url": imgs[key]["url"], "title": title}
+
+        # Fallback regex for full-resolution pinimg image
+        orig_match = re.search(r'https://i\.pinimg\.com/originals/[^\s"\'<>]+\.(?:jpg|jpeg|png|webp)', html)
+        if orig_match:
+            return {"type": "image", "url": orig_match.group(0), "title": "Pinterest Image"}
+
+    except Exception as pe:
+        logger.warning("Pinterest custom extractor failed: %s", pe)
+
+    return None
 
 
 def get_base_ydl_opts(temp_dir: str, progress_hook=None) -> dict:
@@ -539,6 +628,29 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
 
     loop = asyncio.get_running_loop()
     temp_dir = tempfile.mkdtemp(prefix="novacore_dl_")
+
+    # Direct image URL handler
+    if is_direct_image_url(target_url):
+        try:
+            await status_msg.edit(f"🖼️ **Downloading image...**\n`{target_url}`")
+            ext = os.path.splitext(target_url.split("?")[0])[1] or ".jpg"
+            img_path = os.path.join(temp_dir, f"image_{int(time.time())}{ext}")
+            req = urllib.request.Request(target_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as r, open(img_path, "wb") as f:
+                f.write(r.read())
+            img_size = os.path.getsize(img_path)
+            await status_msg.edit(f"📤 **Uploading Image:** `{format_bytes(img_size)}`...")
+            await event.client.send_file(
+                event.chat_id,
+                file=img_path,
+                caption=f"🖼️ **Image**\n💾 `{format_bytes(img_size)}`",
+                reply_to=getattr(event, "topic_id", None),
+            )
+            await status_msg.delete()
+            return
+        except Exception as ie:
+            logger.exception("Direct image download failed: %s", ie)
+
     last_hook_time = [0.0]
 
     def ytdl_progress_hook(d: dict):
@@ -653,6 +765,35 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
     except Exception as e:
         err_msg = str(e)
         logger.exception("Downloader failed: %s", err_msg)
+        if is_pinterest_url(target_url) or "pinterest" in target_url.lower() or "pin.it" in target_url.lower():
+            try:
+                await status_msg.edit("📌 **Extracting high-resolution Pinterest media...**")
+                res = await loop.run_in_executor(None, extract_pinterest_media, target_url)
+                if res and res.get("url"):
+                    media_url = res["url"]
+                    title = res.get("title", "Pinterest Media")
+                    is_vid = res.get("type") == "video"
+                    ext = ".mp4" if is_vid else (".png" if ".png" in media_url.lower() else ".jpg")
+                    out_path = os.path.join(temp_dir, f"pin_{int(time.time())}{ext}")
+
+                    req = urllib.request.Request(media_url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=15) as r, open(out_path, "wb") as f:
+                        f.write(r.read())
+
+                    m_size = os.path.getsize(out_path)
+                    await status_msg.edit(f"📤 **Uploading to Telegram:** `{format_bytes(m_size)}`...")
+                    caption = f"📌 **{title}**\n💾 `{format_bytes(m_size)}` • 🎯 `Original Quality`"
+                    await event.client.send_file(
+                        event.chat_id,
+                        file=out_path,
+                        caption=caption,
+                        reply_to=getattr(event, "topic_id", None),
+                    )
+                    await status_msg.delete()
+                    return
+            except Exception as pe:
+                logger.exception("Pinterest fallback extraction failed: %s", pe)
+
         if "confirm you’re not a bot" in err_msg or "Sign in to confirm" in err_msg:
             await status_msg.edit(
                 "🛡️ **YouTube Datacenter Protection**\n\n"
