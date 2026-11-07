@@ -109,3 +109,4 @@ pyzipper>=0.4.0
 py7zr>=1.1.4
 rarfile>=4.5
 pymupdf>=2.1
+qrcode>=8.0
