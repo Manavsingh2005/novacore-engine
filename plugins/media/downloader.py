@@ -693,21 +693,33 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
 
 
 # ==========================================
-# DIRECT LINK LISTENER IN PRIVATE CHAT
+# DIRECT LINK LISTENER (ZERO-COMMAND AUTO DOWNLOAD)
 # ==========================================
 
-@client_raw_handler(events.NewMessage(incoming=True, func=lambda e: e.is_private and not e.text.startswith(("/", "."))))
+@client_raw_handler(events.NewMessage(
+    incoming=True,
+    func=lambda e: not (getattr(e, "text", "") or "").startswith(("/", "."))
+    and ("http://" in (getattr(e, "text", "") or "") or "https://" in (getattr(e, "text", "") or ""))
+))
 async def direct_link_listener(event: SafeMessageWrapper):
-    """Automatically detects media links pasted directly in PM."""
-    text = (event.message.text or "").strip()
-    if not text.startswith(("http://", "https://")):
+    """Automatically detects media links pasted directly without needing /dl."""
+    is_pm = getattr(event, "is_private", True)
+    is_mentioned = getattr(event, "mentioned", False)
+
+    # In groups only process if bot is tagged or mentioned; in PM process all links directly
+    if not is_pm and not is_mentioned:
+        return
+
+    text = (getattr(event.message, "text", "") or getattr(event.message, "message", "") or "").strip()
+    if not text:
         return
 
     target_url = clean_media_target(text)
-    if not target_url:
+    if not target_url or not target_url.startswith(("http://", "https://")):
         return
 
-    # Trigger download command directly!
+    logger.info("Auto-detected direct media link: %s in chat %s", target_url, event.chat_id)
+    # Trigger download pipeline directly!
     await download_cmd(event, query=target_url)
 
 
