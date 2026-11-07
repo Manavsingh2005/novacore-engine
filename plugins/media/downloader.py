@@ -522,6 +522,11 @@ async def download_cmd(event: SafeMessageWrapper, query: str = ""):
         await event.reply("❌ **Error:** No valid media URL found.")
         return
 
+    await handle_media_url(event, target_url, explicit_quality=explicit_quality)
+
+
+async def handle_media_url(event: SafeMessageWrapper, target_url: str, explicit_quality: Optional[str] = None):
+    """Core handler for routing and downloading media URLs from any source."""
     # If explicit quality was specified, download immediately
     if explicit_quality:
         return await _execute_dl(event, target_url, quality=explicit_quality)
@@ -861,7 +866,7 @@ async def direct_link_listener(event: SafeMessageWrapper):
 
     logger.info("Auto-detected direct media link: %s in chat %s", target_url, event.chat_id)
     # Trigger download pipeline directly!
-    await download_cmd(event, query=target_url)
+    await handle_media_url(event, target_url)
 
 
 # ==========================================
