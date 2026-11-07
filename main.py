@@ -31,7 +31,8 @@ logger = logging.getLogger("novacore.main")
 async def periodic_temp_cleaner():
     """
     Background garbage collector: sweeps orphan temporary directories and files
-    every 10 minutes to guarantee the server disk always stays 100% clean.
+    every 10 minutes, safely purging orphaned items older than 40 minutes (2400 seconds)
+    to allow large (up to 2GB) files ample time to download and upload.
     """
     tmp_root = tempfile.gettempdir()
     while True:
@@ -43,9 +44,21 @@ async def periodic_temp_cleaner():
                     if entry.startswith(("novacore_", "yarn--")):
                         full_p = os.path.join(tmp_root, entry)
                         try:
-                            mtime = os.path.getmtime(full_p)
-                            # Remove temporary directories/files older than 15 minutes (900 seconds)
-                            if now - mtime > 900:
+                            # Check most recent file modification inside directory
+                            latest_mtime = os.path.getmtime(full_p)
+                            if os.path.isdir(full_p):
+                                for root, _, files in os.walk(full_p):
+                                    for f in files:
+                                        try:
+                                            fp = os.path.join(root, f)
+                                            fmtime = os.path.getmtime(fp)
+                                            if fmtime > latest_mtime:
+                                                latest_mtime = fmtime
+                                        except Exception:
+                                            pass
+
+                            # 40-minute safe threshold (2400 seconds) so large 2GB uploads are never cut short
+                            if now - latest_mtime > 2400:
                                 if os.path.isdir(full_p):
                                     shutil.rmtree(full_p, ignore_errors=True)
                                 else:
@@ -54,7 +67,7 @@ async def periodic_temp_cleaner():
                         except Exception:
                             pass
             if cleaned_count > 0:
-                logger.info("Periodic server cleaner purged %d stale temporary entries.", cleaned_count)
+                logger.info("Periodic server cleaner purged %d stale temporary entries (>40m).", cleaned_count)
         except Exception as e:
             logger.warning("Periodic cleaner error: %s", e)
         await asyncio.sleep(600)  # Check every 10 minutes

@@ -530,6 +530,7 @@ async def batch_zip_file_receiver(event: SafeMessageWrapper):
         saved_path = await event.client.download_media(msg, file=dest_path)
         if saved_path and os.path.exists(saved_path):
             session["files"].append(saved_path)
+            session["last_activity"] = time.time()
             fsize = os.path.getsize(saved_path)
             await event.reply(
                 f"📥 **Added to `{session['name']}`:** `{os.path.basename(saved_path)}` (`{format_bytes(fsize)}`)\n"
