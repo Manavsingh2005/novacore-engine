@@ -17,6 +17,9 @@ def get_start_buttons():
         ],
         [
             Button.inline("🔄 File Converter", data="help:converter"),
+            Button.inline("✨ Power & AI Tools", data="help:powertools"),
+        ],
+        [
             Button.inline("ℹ️ Bot Info & Specs", data="help:info"),
         ],
     ]
@@ -29,11 +32,14 @@ async def start_cmd(event: SafeMessageWrapper, query: str = ""):
 
     text = (
         f"👋 **Hello {name}! Welcome to Manav's Utility Bot** 🚀\n\n"
-        "Your all-in-one, 24/7 cloud toolbox powered by high-speed AWS MTProto streaming (up to 2GB files).\n\n"
+        "Your all-in-one, 24/7 cloud toolbox powered by high-speed AWS MTProto streaming (up to 2GB files) and Groq LPU AI.\n\n"
         "✨ **Core Features:**\n"
-        "• 📥 **Media Downloader:** YouTube (1080p/720p/MP3), Instagram Reels, TikTok, Twitter/X, Reddit & Songs.\n"
+        "• 📥 **Media Downloader:** YouTube (1080p/720p/MP3), Instagram, TikTok, Twitter/X, Reddit & Pinterest (Zero commands needed).\n"
         "• 🗜️ **Archive Studio:** Zip, Unzip, and extract `.zip`, `.rar`, `.7z`, `.tar` with full AES password support.\n"
-        "• 🔄 **File Converter:** Convert Video, Audio, Images, GIFs & Documents in one tap.\n\n"
+        "• 🔄 **File Converter:** Convert Video, Audio, Images, GIFs & Documents in one tap.\n"
+        "• 📱 **QR Studio & CDN Host:** Custom QR codes, QR scanner & instant direct CDN links.\n"
+        "• 🧠 **Groq AI Article Reader:** Ad-free blog/article reader with executive AI summaries.\n"
+        "• 🎛️ **Audio FX & Karaoke:** Nightcore, Slowed+Reverb, Audio Speed & Vocal/Instrumental split.\n\n"
         "👇 **Tap a category below to explore commands and quick tutorials:**"
     )
     await event.reply(text, buttons=get_start_buttons())
@@ -49,6 +55,8 @@ async def help_cmd(event: SafeMessageWrapper, query: str = ""):
         await show_archiver_help(event)
     elif sub in ["convert", "converter", "format"]:
         await show_converter_help(event)
+    elif sub in ["tools", "power", "ai", "qr", "speed", "karaoke", "read"]:
+        await show_powertools_help(event)
     else:
         text = (
             "📖 **Manav's Utility Bot — Help Center**\n\n"
@@ -63,7 +71,7 @@ async def show_downloader_help(event: SafeMessageWrapper):
         "━━━━━━━━━━━━━━━━━━━━\n"
         "• `/dl <url>` — Downloads video from 1000+ sites.\n"
         "  ↳ **YouTube:** Shows interactive buttons (1080p, 720p, 480p, 360p, MP3).\n"
-        "  ↳ **Instagram / TikTok / Twitter / Reddit:** Downloads highest quality instantly.\n"
+        "  ↳ **Instagram / TikTok / Twitter / Reddit / Pinterest:** Downloads highest quality instantly.\n"
         "• `/dl 720 <url>` — Direct 720p HD download.\n"
         "• `/dl 1080 <url>` — Direct 1080p Full HD download.\n"
         "• `/dl best <url>` — Direct highest resolution download.\n"
@@ -112,14 +120,39 @@ async def show_converter_help(event: SafeMessageWrapper):
     await event.edit(text, buttons=buttons)
 
 
+async def show_powertools_help(event: SafeMessageWrapper):
+    text = (
+        "✨ **Power & AI Tools Guide**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "📱 **QR Code Studio:**\n"
+        "• `/qr <text/url>` — Generate sleek high-res QR code (themes: `dark`, `purple`, `gold`, `cyan`)\n"
+        "• `/readqr` — Reply to any photo or screenshot to decode QR data (WiFi, links, text)\n\n"
+        "🌐 **Instant CDN Host:**\n"
+        "• `/upload` or `/tgm` — Reply to any image, GIF, or document (up to 200MB) for permanent direct CDN links\n\n"
+        "📖 **Groq AI Article Reader:**\n"
+        "• `/read <url>` — Clean distraction-free article reader with Groq LPU executive summary & bullet points\n\n"
+        "🎛️ **Audio Speed & FX:**\n"
+        "• `/speed [rate]` — Change speed (0.5x–2.0x) or reply `/speed` for presets\n"
+        "• `/nightcore` — High-energy Nightcore pitch + tempo boost\n"
+        "• `/slowed` — Dreamy Slowed + Reverb aesthetic\n\n"
+        "🎤 **Vocal & Instrumental Separator:**\n"
+        "• `/split` — Separate any song into Karaoke Instrumental and Acapella Vocals\n"
+        "• `/split lyrics` — Transcribe full lyrics via Groq Whisper AI\n"
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+    buttons = [[Button.inline("« Back to Main Menu", data="help:main")]]
+    await event.edit(text, buttons=buttons)
+
+
 async def show_info_help(event: SafeMessageWrapper):
     text = (
         "ℹ️ **Bot Specs & Infrastructure**\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "• **Bot:** @utilitybymnvbot\n"
-        "• **Architecture:** Telethon MTProto Bot (Up to 2GB file limit)\n"
+        "• **Architecture:** Telethon MTProto Bot (Up to 2GB file streaming)\n"
         "• **Hosting:** AWS EC2 Cloud Daemon (24/7 Uptime)\n"
-        "• **Engines:** yt-dlp, FFmpeg 7.x, PyMuPDF, pyzipper, Pillow\n"
+        "• **AI Engine:** Groq Elastic Multi-Key LPU Pool (250+ tokens/sec)\n"
+        "• **Engines:** yt-dlp, FFmpeg, PyMuPDF, pyzipper, Pillow, qrcode, BeautifulSoup4\n"
         "• **Owner:** Manav\n"
         "━━━━━━━━━━━━━━━━━━━━"
     )
@@ -138,6 +171,8 @@ async def help_callback_handler(event: SafeMessageWrapper):
         await show_archiver_help(event)
     elif category == "converter":
         await show_converter_help(event)
+    elif category == "powertools":
+        await show_powertools_help(event)
     elif category == "info":
         await show_info_help(event)
     elif category == "main":
