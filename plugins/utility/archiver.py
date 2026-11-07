@@ -27,7 +27,7 @@ import pyzipper
 from telethon import Button
 from telethon.tl.types import DocumentAttributeFilename
 
-from core.dispatcher import bot_cmd, bot_callback, SafeMessageWrapper
+from core.dispatcher import bot_cmd, bot_callback, client_raw_handler, SafeMessageWrapper
 from helpers.formatters import format_bytes
 
 logger = logging.getLogger("novacore.plugin.utility.archiver")
@@ -53,6 +53,39 @@ def get_archive_filename(msg) -> str:
             if isinstance(attr, DocumentAttributeFilename):
                 return attr.file_name
     return "archive"
+
+
+def get_media_filename(msg, fallback_index: int = 1) -> str:
+    """Extracts filename with extension for any Telegram media object."""
+    if not msg:
+        return f"file_{fallback_index}"
+
+    # Document filename
+    if getattr(msg, "document", None):
+        for attr in getattr(msg.document, "attributes", []):
+            if isinstance(attr, DocumentAttributeFilename):
+                return attr.file_name
+
+    # Telethon file property
+    if getattr(msg, "file", None) and getattr(msg.file, "name", None):
+        return msg.file.name
+
+    # Telegram Photo
+    if getattr(msg, "photo", None):
+        return f"photo_{int(time.time())}_{fallback_index}.jpg"
+
+    # Telegram Video
+    if getattr(msg, "video", None):
+        return f"video_{int(time.time())}_{fallback_index}.mp4"
+
+    # Telegram Audio / Voice
+    if getattr(msg, "voice", None):
+        return f"voice_{int(time.time())}_{fallback_index}.ogg"
+    if getattr(msg, "audio", None):
+        return f"audio_{int(time.time())}_{fallback_index}.mp3"
+
+    ext = getattr(msg.file, "ext", "") if getattr(msg, "file", None) else ""
+    return f"file_{int(time.time())}_{fallback_index}{ext or ''}"
 
 
 def is_archive(filename: str) -> bool:
@@ -466,6 +499,45 @@ async def zip_cmd(event: SafeMessageWrapper, query: str = ""):
 # ==========================================
 
 from telethon import events
+
+
+@client_raw_handler(events.NewMessage(
+    incoming=True,
+    func=lambda e: (e.media or e.photo or e.document) and not (getattr(e, "text", "") or "").startswith(("/", "."))
+))
+async def batch_zip_file_receiver(event: SafeMessageWrapper):
+    """
+    Automatically captures incoming media/files when the sender has an active /zip new session.
+    """
+    user_id = event.sender_id or event.chat_id
+    session = ZIP_SESSIONS.get(user_id)
+    if not session:
+        return
+
+    msg = event.message
+    if not (getattr(msg, "media", None) or getattr(msg, "photo", None) or getattr(msg, "document", None) or getattr(msg, "file", None)):
+        return
+
+    filename = get_media_filename(msg, fallback_index=len(session["files"]) + 1)
+    dest_path = os.path.join(session["dir"], filename)
+    base, ext = os.path.splitext(filename)
+    counter = 1
+    while os.path.exists(dest_path):
+        dest_path = os.path.join(session["dir"], f"{base}_{counter}{ext}")
+        counter += 1
+
+    try:
+        saved_path = await event.client.download_media(msg, file=dest_path)
+        if saved_path and os.path.exists(saved_path):
+            session["files"].append(saved_path)
+            fsize = os.path.getsize(saved_path)
+            await event.reply(
+                f"📥 **Added to `{session['name']}`:** `{os.path.basename(saved_path)}` (`{format_bytes(fsize)}`)\n"
+                f"📊 **Total files in session:** `{len(session['files'])}`\n"
+                f"👉 *Send more files, or type `/zip done` to finish!*"
+            )
+    except Exception as e:
+        logger.exception("Failed to download media for batch zip: %s", e)
 
 @bot_cmd(
     pattern=r"(?:ziplist|listarchive)",
