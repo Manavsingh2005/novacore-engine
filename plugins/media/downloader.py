@@ -658,111 +658,111 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
     loop = asyncio.get_running_loop()
     temp_dir = tempfile.mkdtemp(prefix="novacore_dl_")
 
-    # Direct image URL handler
-    if is_direct_image_url(target_url):
-        try:
-            await status_msg.edit(f"🖼️ **Downloading image...**\n`{target_url}`")
-            ext = os.path.splitext(target_url.split("?")[0])[1] or ".jpg"
-            img_path = os.path.join(temp_dir, f"image_{int(time.time())}{ext}")
-            req = urllib.request.Request(target_url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=15) as r, open(img_path, "wb") as f:
-                f.write(r.read())
-            img_size = os.path.getsize(img_path)
-            await status_msg.edit(f"📤 **Uploading Image:** `{format_bytes(img_size)}`...")
-            await event.client.send_file(
-                event.chat_id,
-                file=img_path,
-                caption=f"🖼️ **Image**\n💾 `{format_bytes(img_size)}`",
-                reply_to=getattr(event, "topic_id", None),
-            )
-            await status_msg.delete()
-            return
-        except Exception as ie:
-            logger.exception("Direct image download failed: %s", ie)
-
-    # Pinterest Fast-Path (instant extraction of original resolution image or video)
-    if is_pinterest_url(target_url) or "pinterest" in target_url.lower() or "pin.it" in target_url.lower():
-        try:
-            await status_msg.edit("📌 **Extracting high-resolution Pinterest media...**")
-            res = await loop.run_in_executor(None, extract_pinterest_media, target_url)
-            if res and res.get("url"):
-                media_url = res["url"]
-                title = res.get("title", "Pinterest Media")
-                is_vid = res.get("type") == "video"
-                ext = ".mp4" if is_vid else (".png" if ".png" in media_url.lower() else ".jpg")
-                out_path = os.path.join(temp_dir, f"pin_{int(time.time())}{ext}")
-
-                req = urllib.request.Request(media_url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=15) as r, open(out_path, "wb") as f:
+    try:
+        # Direct image URL handler
+        if is_direct_image_url(target_url):
+            try:
+                await status_msg.edit(f"🖼️ **Downloading image...**\n`{target_url}`")
+                ext = os.path.splitext(target_url.split("?")[0])[1] or ".jpg"
+                img_path = os.path.join(temp_dir, f"image_{int(time.time())}{ext}")
+                req = urllib.request.Request(target_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=15) as r, open(img_path, "wb") as f:
                     f.write(r.read())
-
-                m_size = os.path.getsize(out_path)
-                await status_msg.edit(f"📤 **Uploading to Telegram:** `{format_bytes(m_size)}`...")
-                caption = f"📌 **{title}**\n💾 `{format_bytes(m_size)}` • 🎯 `Original Quality`"
+                img_size = os.path.getsize(img_path)
+                await status_msg.edit(f"📤 **Uploading Image:** `{format_bytes(img_size)}`...")
                 await event.client.send_file(
                     event.chat_id,
-                    file=out_path,
-                    caption=caption,
+                    file=img_path,
+                    caption=f"🖼️ **Image**\n💾 `{format_bytes(img_size)}`",
                     reply_to=getattr(event, "topic_id", None),
                 )
                 await status_msg.delete()
                 return
-        except Exception as pe:
-            logger.warning("Pinterest fast-path failed, falling back to yt-dlp: %s", pe)
+            except Exception as ie:
+                logger.exception("Direct image download failed: %s", ie)
 
-    last_hook_time = [0.0]
+        # Pinterest Fast-Path (instant extraction of original resolution image or video)
+        if is_pinterest_url(target_url) or "pinterest" in target_url.lower() or "pin.it" in target_url.lower():
+            try:
+                await status_msg.edit("📌 **Extracting high-resolution Pinterest media...**")
+                res = await loop.run_in_executor(None, extract_pinterest_media, target_url)
+                if res and res.get("url"):
+                    media_url = res["url"]
+                    title = res.get("title", "Pinterest Media")
+                    is_vid = res.get("type") == "video"
+                    ext = ".mp4" if is_vid else (".png" if ".png" in media_url.lower() else ".jpg")
+                    out_path = os.path.join(temp_dir, f"pin_{int(time.time())}{ext}")
 
-    def ytdl_progress_hook(d: dict):
-        if d.get("status") == "downloading":
-            now = time.time()
-            if now - last_hook_time[0] >= 3.5:
-                last_hook_time[0] = now
-                downloaded = d.get("downloaded_bytes", 0)
-                total = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
-                speed = d.get("speed", 0) or 0
-                pct = f"{int(downloaded / total * 100)}%" if total else "..."
-                text = (
-                    f"📥 **Downloading Media ({quality}):** `{pct}`\n"
-                    f"• **Downloaded:** `{format_bytes(downloaded)}` / `{format_bytes(total)}`\n"
-                    f"• **Speed:** `{format_bytes(int(speed))}/s`"
-                )
-                try:
-                    asyncio.run_coroutine_threadsafe(status_msg.edit(text), loop)
-                except Exception:
-                    pass
+                    req = urllib.request.Request(media_url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=15) as r, open(out_path, "wb") as f:
+                        f.write(r.read())
 
-    ydl_opts = get_base_ydl_opts(temp_dir, ytdl_progress_hook)
+                    m_size = os.path.getsize(out_path)
+                    await status_msg.edit(f"📤 **Uploading to Telegram:** `{format_bytes(m_size)}`...")
+                    caption = f"📌 **{title}**\n💾 `{format_bytes(m_size)}` • 🎯 `Original Quality`"
+                    await event.client.send_file(
+                        event.chat_id,
+                        file=out_path,
+                        caption=caption,
+                        reply_to=getattr(event, "topic_id", None),
+                    )
+                    await status_msg.delete()
+                    return
+            except Exception as pe:
+                logger.warning("Pinterest fast-path failed, falling back to yt-dlp: %s", pe)
 
-    # Resilient format selector for portrait, landscape, and fallback
-    if quality == "1080":
-        fmt = (
-            "bestvideo[height<=?1080]+bestaudio/bestvideo[width<=?1080]+bestaudio/"
-            "best[height<=?1080]/best[width<=?1080]/bestvideo+bestaudio/best"
-        )
-    elif quality == "720":
-        fmt = (
-            "bestvideo[height<=?720]+bestaudio/bestvideo[width<=?720]+bestaudio/"
-            "best[height<=?720]/best[width<=?720]/bestvideo+bestaudio/best"
-        )
-    elif quality == "480":
-        fmt = (
-            "bestvideo[height<=?480]+bestaudio/bestvideo[width<=?480]+bestaudio/"
-            "best[height<=?480]/best[width<=?480]/bestvideo+bestaudio/best"
-        )
-    elif quality == "360":
-        fmt = (
-            "bestvideo[height<=?360]+bestaudio/bestvideo[width<=?360]+bestaudio/"
-            "best[height<=?360]/best[width<=?360]/bestvideo+bestaudio/best"
-        )
-    else:
-        fmt = "bestvideo*+bestaudio/best"
+        last_hook_time = [0.0]
 
-    ydl_opts.update({
-        "format": fmt,
-        "merge_output_format": "mp4",
-    })
+        def ytdl_progress_hook(d: dict):
+            if d.get("status") == "downloading":
+                now = time.time()
+                if now - last_hook_time[0] >= 3.5:
+                    last_hook_time[0] = now
+                    downloaded = d.get("downloaded_bytes", 0)
+                    total = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
+                    speed = d.get("speed", 0) or 0
+                    pct = f"{int(downloaded / total * 100)}%" if total else "..."
+                    text = (
+                        f"📥 **Downloading Media ({quality}):** `{pct}`\n"
+                        f"• **Downloaded:** `{format_bytes(downloaded)}` / `{format_bytes(total)}`\n"
+                        f"• **Speed:** `{format_bytes(int(speed))}/s`"
+                    )
+                    try:
+                        asyncio.run_coroutine_threadsafe(status_msg.edit(text), loop)
+                    except Exception:
+                        pass
 
-    try:
+        ydl_opts = get_base_ydl_opts(temp_dir, ytdl_progress_hook)
+
+        # Resilient format selector for portrait, landscape, and fallback
+        if quality == "1080":
+            fmt = (
+                "bestvideo[height<=?1080]+bestaudio/bestvideo[width<=?1080]+bestaudio/"
+                "best[height<=?1080]/best[width<=?1080]/bestvideo+bestaudio/best"
+            )
+        elif quality == "720":
+            fmt = (
+                "bestvideo[height<=?720]+bestaudio/bestvideo[width<=?720]+bestaudio/"
+                "best[height<=?720]/best[width<=?720]/bestvideo+bestaudio/best"
+            )
+        elif quality == "480":
+            fmt = (
+                "bestvideo[height<=?480]+bestaudio/bestvideo[width<=?480]+bestaudio/"
+                "best[height<=?480]/best[width<=?480]/bestvideo+bestaudio/best"
+            )
+        elif quality == "360":
+            fmt = (
+                "bestvideo[height<=?360]+bestaudio/bestvideo[width<=?360]+bestaudio/"
+                "best[height<=?360]/best[width<=?360]/bestvideo+bestaudio/best"
+            )
+        else:
+            fmt = "bestvideo*+bestaudio/best"
+
+        ydl_opts.update({
+            "format": fmt,
+            "merge_output_format": "mp4",
+        })
+
         def _extract():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 return ydl.extract_info(target_url, download=True)
