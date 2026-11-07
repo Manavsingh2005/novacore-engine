@@ -100,61 +100,85 @@ def extract_pinterest_media(url: str) -> Optional[Dict[str, Any]]:
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                )
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
             }
         )
         with urllib.request.urlopen(req, timeout=12) as resp:
+            final_url = resp.geturl()
             html = resp.read().decode("utf-8", errors="ignore")
 
-        # Search for pins in __PWS_INITIAL_PROPS__ or __PWS_DATA__
-        for marker in ['id="__PWS_INITIAL_PROPS__"', 'id="__PWS_DATA__"']:
-            idx = html.find(marker)
-            if idx == -1:
-                continue
-            end = html.find('</script>', idx)
-            snippet = html[idx:end]
-            json_str = snippet[snippet.find('>') + 1:]
+        # Extract Pin ID from final URL or original URL
+        pin_match = re.search(r'/pin/(\d+)', final_url) or re.search(r'/pin/(\d+)', url)
+        pin_id = pin_match.group(1) if pin_match else None
+
+        # 1. Primary: Check OpenGraph meta tags (OpenGraph is strictly pin-specific)
+        og_img_match = (
+            re.search(r'<meta[^>]+(?:property|name)=[\'"]og:image[\'"][^>]+content=[\'"]([^\'"]+)[\'"]', html, re.I)
+            or re.search(r'<meta[^>]+content=[\'"]([^\'"]+)[\'"][^>]+(?:property|name)=[\'"]og:image[\'"]', html, re.I)
+        )
+        og_title_match = (
+            re.search(r'<meta[^>]+(?:property|name)=[\'"]og:title[\'"][^>]+content=[\'"]([^\'"]+)[\'"]', html, re.I)
+            or re.search(r'<meta[^>]+content=[\'"]([^\'"]+)[\'"][^>]+(?:property|name)=[\'"]og:title[\'"]', html, re.I)
+        )
+        og_video_match = (
+            re.search(r'<meta[^>]+(?:property|name)=[\'"]og:video(?::secure_url)?[\'"][^>]+content=[\'"]([^\'"]+)[\'"]', html, re.I)
+            or re.search(r'<meta[^>]+content=[\'"]([^\'"]+)[\'"][^>]+(?:property|name)=[\'"]og:video(?::secure_url)?[\'"]', html, re.I)
+        )
+
+        title = og_title_match.group(1).strip() if og_title_match else "Pinterest Media"
+        title = re.sub(r'\s*\|\s*Pinterest$', '', title, flags=re.I)
+
+        # If OpenGraph has a video URL:
+        if og_video_match:
+            v_url = og_video_match.group(1).strip()
+            if v_url.startswith("http"):
+                return {"type": "video", "url": v_url, "title": title}
+
+        # 2. Check JSON data specifically matching pin_id (for videos or original image assets)
+        if pin_id:
+            for m in re.finditer(r'<script[^>]*data-test-id=[\'"]resource-response-data[\'"][^>]*>(.*?)</script>', html, re.DOTALL):
+                try:
+                    data = json.loads(m.group(1))
+                    res_data = data.get("resource_response", {}).get("data", {})
+                    if isinstance(res_data, dict) and str(res_data.get("id")) == str(pin_id):
+                        p_title = res_data.get("title") or res_data.get("grid_title") or title
+                        # Video check
+                        videos = res_data.get("videos")
+                        if isinstance(videos, dict):
+                            v_list = videos.get("video_list", {})
+                            for v_qual in ["V_720P", "V_EXP7", "V_480P", "V_HLSV4"]:
+                                if v_qual in v_list and "url" in v_list[v_qual]:
+                                    return {"type": "video", "url": v_list[v_qual]["url"], "title": p_title}
+                        # Image check
+                        imgs = res_data.get("images", {})
+                        for key in ["orig", "originals", "736x"]:
+                            if key in imgs and "url" in imgs[key]:
+                                orig = imgs[key]["url"]
+                                if "/736x/" in orig:
+                                    orig = orig.replace("/736x/", "/originals/")
+                                return {"type": "image", "url": orig, "title": p_title}
+                except Exception:
+                    pass
+
+        # 3. If OpenGraph has an image URL, upgrade to originals resolution
+        if og_img_match:
+            img_url = og_img_match.group(1).strip()
+            orig_candidate = re.sub(r'/(?:736x|\d+x)/', '/originals/', img_url)
             try:
-                data = json.loads(json_str)
+                check_req = urllib.request.Request(orig_candidate, method='HEAD', headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(check_req, timeout=5) as chk:
+                    if chk.status == 200:
+                        return {"type": "image", "url": orig_candidate, "title": title}
             except Exception:
-                continue
+                pass
+            return {"type": "image", "url": img_url, "title": title}
 
-            def find_pin_info(obj):
-                if isinstance(obj, dict):
-                    if "images" in obj and ("orig" in obj["images"] or "originals" in obj["images"] or "736x" in obj["images"]):
-                        return obj
-                    for v in obj.values():
-                        res = find_pin_info(v)
-                        if res:
-                            return res
-                elif isinstance(obj, list):
-                    for item in obj:
-                        res = find_pin_info(item)
-                        if res:
-                            return res
-                return None
-
-            pin = find_pin_info(data)
-            if pin:
-                title = pin.get("title") or pin.get("grid_title") or "Pinterest Media"
-                # Check for video first
-                videos = pin.get("videos")
-                if videos and isinstance(videos, dict):
-                    v_list = videos.get("video_list", {})
-                    for v_qual in ["V_720P", "V_EXP7", "V_480P", "V_HLSV4"]:
-                        if v_qual in v_list and "url" in v_list[v_qual]:
-                            return {"type": "video", "url": v_list[v_qual]["url"], "title": title}
-
-                # Image extraction
-                imgs = pin.get("images", {})
-                for key in ["orig", "originals", "750x", "736x"]:
-                    if key in imgs and "url" in imgs[key]:
-                        return {"type": "image", "url": imgs[key]["url"], "title": title}
-
-        # Fallback regex for full-resolution pinimg image
-        orig_match = re.search(r'https://i\.pinimg\.com/originals/[^\s"\'<>]+\.(?:jpg|jpeg|png|webp)', html)
-        if orig_match:
-            return {"type": "image", "url": orig_match.group(0), "title": "Pinterest Image"}
+        # 4. Fallback: Search for any originals URL containing pin_id or in HTML
+        if pin_id:
+            pin_img = re.search(r'https://i\.pinimg\.com/originals/[^\s"\'<>]+\.(?:jpg|jpeg|png|webp)', html)
+            if pin_img:
+                return {"type": "image", "url": pin_img.group(0), "title": title}
 
     except Exception as pe:
         logger.warning("Pinterest custom extractor failed: %s", pe)
@@ -655,6 +679,36 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
             return
         except Exception as ie:
             logger.exception("Direct image download failed: %s", ie)
+
+    # Pinterest Fast-Path (instant extraction of original resolution image or video)
+    if is_pinterest_url(target_url) or "pinterest" in target_url.lower() or "pin.it" in target_url.lower():
+        try:
+            await status_msg.edit("📌 **Extracting high-resolution Pinterest media...**")
+            res = await loop.run_in_executor(None, extract_pinterest_media, target_url)
+            if res and res.get("url"):
+                media_url = res["url"]
+                title = res.get("title", "Pinterest Media")
+                is_vid = res.get("type") == "video"
+                ext = ".mp4" if is_vid else (".png" if ".png" in media_url.lower() else ".jpg")
+                out_path = os.path.join(temp_dir, f"pin_{int(time.time())}{ext}")
+
+                req = urllib.request.Request(media_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=15) as r, open(out_path, "wb") as f:
+                    f.write(r.read())
+
+                m_size = os.path.getsize(out_path)
+                await status_msg.edit(f"📤 **Uploading to Telegram:** `{format_bytes(m_size)}`...")
+                caption = f"📌 **{title}**\n💾 `{format_bytes(m_size)}` • 🎯 `Original Quality`"
+                await event.client.send_file(
+                    event.chat_id,
+                    file=out_path,
+                    caption=caption,
+                    reply_to=getattr(event, "topic_id", None),
+                )
+                await status_msg.delete()
+                return
+        except Exception as pe:
+            logger.warning("Pinterest fast-path failed, falling back to yt-dlp: %s", pe)
 
     last_hook_time = [0.0]
 
