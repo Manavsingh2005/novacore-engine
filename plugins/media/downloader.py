@@ -159,9 +159,14 @@ async def _download_and_send_song(
         ],
     })
 
-    try:
-        await event.edit("⚡ **Streaming audio track...**")
+    is_cb = isinstance(getattr(event, "_event", None), events.CallbackQuery.Event)
+    if is_cb:
+        status_msg = event
+        await status_msg.edit("⚡ **Streaming audio track...**")
+    else:
+        status_msg = await event.reply("⚡ **Streaming audio track...**")
 
+    try:
         def _extract():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 return ydl.extract_info(target_url, download=True)
@@ -174,7 +179,7 @@ async def _download_and_send_song(
         ]
 
         if not downloaded:
-            await event.edit("❌ **Error:** No audio track could be extracted.")
+            await status_msg.edit("❌ **Error:** No audio track could be extracted.")
             return
 
         file_path = downloaded[0]
@@ -198,7 +203,7 @@ async def _download_and_send_song(
             or 0
         )
 
-        await event.edit(f"📤 **Uploading MP3 Audio:** `{format_bytes(file_size)}`...")
+        await status_msg.edit(f"📤 **Uploading MP3 Audio:** `{format_bytes(file_size)}`...")
 
         audio_attr = DocumentAttributeAudio(
             duration=duration,
@@ -214,7 +219,7 @@ async def _download_and_send_song(
             if now - last_up_time[0] >= 3.5:
                 last_up_time[0] = now
                 pct = int(current / total * 100) if total else 0
-                await event.edit(
+                await status_msg.edit(
                     f"📤 **Uploading MP3:** `{pct}%` (`{format_bytes(current)}` / `{format_bytes(total)}`)"
                 )
 
@@ -228,17 +233,17 @@ async def _download_and_send_song(
             progress_callback=upload_progress,
             reply_to=event.topic_id,
         )
-        await event.delete()
+        await status_msg.delete()
     except Exception as e:
         err_msg = str(e)
         logger.exception("Song download failed: %s", err_msg)
         if "confirm you’re not a bot" in err_msg or "Sign in to confirm" in err_msg:
-            await event.edit(
+            await status_msg.edit(
                 "🛡️ **YouTube Datacenter Protection**\n\n"
                 "YouTube is challenging cloud server IPs. Send your YouTube cookies via `/cookies` to unlock."
             )
         else:
-            await event.edit(f"❌ **Song Download Failed:** `{err_msg[:250]}`")
+            await status_msg.edit(f"❌ **Song Download Failed:** `{err_msg[:250]}`")
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -525,10 +530,14 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
     """Downloads video according to specified resolution."""
     # Route audio quality to MP3 extraction
     if quality in ["audio", "mp3"]:
-        await event.edit(f"🎵 **Extracting MP3 Audio:** `{target_url}`...")
         return await _download_and_send_song(event, target_url)
 
-    await event.edit(f"⚡ **Downloading media ({quality})...**\n`{target_url}`")
+    is_cb = isinstance(getattr(event, "_event", None), events.CallbackQuery.Event)
+    if is_cb:
+        status_msg = event
+        await status_msg.edit(f"⚡ **Downloading media ({quality})...**\n`{target_url}`")
+    else:
+        status_msg = await event.reply(f"⚡ **Downloading media ({quality})...**\n`{target_url}`")
 
     loop = asyncio.get_running_loop()
     temp_dir = tempfile.mkdtemp(prefix="novacore_dl_")
@@ -549,7 +558,7 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
                     f"• **Speed:** `{format_bytes(int(speed))}/s`"
                 )
                 try:
-                    asyncio.run_coroutine_threadsafe(event.edit(text), loop)
+                    asyncio.run_coroutine_threadsafe(status_msg.edit(text), loop)
                 except Exception:
                     pass
 
@@ -605,7 +614,7 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
         downloaded_files.sort(key=lambda x: os.path.getsize(x), reverse=True)
 
         if not downloaded_files:
-            await event.edit("❌ **Error:** No media file was produced.")
+            await status_msg.edit("❌ **Error:** No media file was produced.")
             return
 
         file_path = downloaded_files[0]
@@ -615,14 +624,14 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
         # MTProto Bot upload limit: 2000 MB (2GB)
         max_limit = 2000 * 1024 * 1024
         if file_size > max_limit:
-            await event.edit(
+            await status_msg.edit(
                 f"⚠️ **File size exceeds Telegram 2GB limit:**\n"
                 f"• Size: `{format_bytes(file_size)}`\n"
                 f"• Limit: `{format_bytes(max_limit)}`"
             )
             return
 
-        await event.edit(f"📤 **Uploading to Telegram:** `{format_bytes(file_size)}`...")
+        await status_msg.edit(f"📤 **Uploading to Telegram:** `{format_bytes(file_size)}`...")
 
         last_up_time = [0.0]
 
@@ -631,7 +640,7 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
             if now - last_up_time[0] >= 3.5:
                 last_up_time[0] = now
                 pct = int(current / total * 100) if total else 0
-                await event.edit(
+                await status_msg.edit(
                     f"📤 **Uploading:** `{pct}%` (`{format_bytes(current)}` / `{format_bytes(total)}`)"
                 )
 
@@ -642,21 +651,45 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
             progress_callback=upload_progress,
             reply_to=event.topic_id,
         )
-        await event.delete()
+        await status_msg.delete()
     except Exception as e:
         err_msg = str(e)
         logger.exception("Downloader failed: %s", err_msg)
         if "confirm you’re not a bot" in err_msg or "Sign in to confirm" in err_msg:
-            await event.edit(
+            await status_msg.edit(
                 "🛡️ **YouTube Datacenter Protection**\n\n"
                 "YouTube is challenging cloud server IPs. Send your YouTube cookies via `/cookies` to unlock."
             )
-        elif "No video formats found" in err_msg or "verify your age" in err_msg:
-            await event.edit("🔞 **Content Restricted / No Streams Available:** Video requires login or has been removed.")
+        elif any(k in err_msg.lower() for k in [
+            "isn't available to everyone",
+            "can't be seen by certain audiences",
+            "restricted video",
+            "login required",
+            "please log in",
+            "only available for registered users",
+            "gated_logged_out",
+        ]):
+            await status_msg.edit(
+                "🔞 **Instagram Audience / Age Restriction**\n\n"
+                "Instagram has flagged this specific reel behind an account login check (18+, sensitive media, or audience restriction).\n\n"
+                "💡 **Standard public reels & videos download automatically without login.**\n\n"
+                "🔓 **To download restricted reels:**\n"
+                "1. Open Instagram in your browser and ensure you are logged in.\n"
+                "2. Export `cookies.txt` using the `Get cookies.txt locally` browser extension.\n"
+                "3. Send the file here and reply to it with `/cookies`!"
+            )
+        elif "verify your age" in err_msg.lower() or "confirm your age" in err_msg.lower():
+            await status_msg.edit(
+                "🔞 **Age-Restricted Video**\n\n"
+                "This video is age-restricted and requires account verification.\n"
+                "💡 Reply to your exported `cookies.txt` with `/cookies` to permanently unlock!"
+            )
+        elif "No video formats found" in err_msg:
+            await status_msg.edit("🔞 **Content Restricted / No Streams Available:** Video requires login or has been removed.")
         elif "HTTP Error 404" in err_msg or "video has been removed" in err_msg:
-            await event.edit("❌ **Video Not Found:** This link appears to be deleted or private.")
+            await status_msg.edit("❌ **Video Not Found:** This link appears to be deleted or private.")
         else:
-            await event.edit(f"❌ **Download Failed:** `{err_msg[:250]}`")
+            await status_msg.edit(f"❌ **Download Failed:** `{err_msg[:250]}`")
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
