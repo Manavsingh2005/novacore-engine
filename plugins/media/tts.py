@@ -76,7 +76,7 @@ async def tts_cmd(event: SafeMessageWrapper, query: str = ""):
             event.chat_id,
             file=tmp_path,
             voice_note=True,
-            reply_to=reply.id if reply else event.topic_id,
+            reply_to=reply.id if reply else getattr(event, "topic_id", None),
         )
         await event.delete()
     except Exception as e:

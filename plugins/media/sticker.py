@@ -84,7 +84,7 @@ async def kang_cmd(event: SafeMessageWrapper, emoji_arg: str = ""):
                 file=sticker_io,
                 force_document=False,
                 attributes=[sticker_attr],
-                reply_to=event.topic_id,
+                reply_to=getattr(event, "topic_id", None),
             )
             await event.delete()
             return
@@ -106,7 +106,7 @@ async def kang_cmd(event: SafeMessageWrapper, emoji_arg: str = ""):
                 file=sticker_io,
                 force_document=False,
                 attributes=[sticker_attr],
-                reply_to=event.topic_id,
+                reply_to=getattr(event, "topic_id", None),
             )
             await event.delete()
             return
@@ -157,7 +157,7 @@ async def kang_cmd(event: SafeMessageWrapper, emoji_arg: str = ""):
             file=sticker_io,
             force_document=False,
             attributes=[sticker_attr],
-            reply_to=event.topic_id,
+            reply_to=getattr(event, "topic_id", None),
         )
         await event.delete()
 

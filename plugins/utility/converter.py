@@ -357,7 +357,7 @@ async def converter_callback_handler(event: SafeMessageWrapper):
                     chat_id,
                     file=img_p,
                     caption=f"📄 Page {idx+1} of `{filename}`",
-                    reply_to=event.topic_id,
+                    reply_to=getattr(event, "topic_id", None),
                 )
             if len(multiple_files) > 10:
                 await event.reply(f"ℹ️ Uploaded first 10 of **{len(multiple_files)} pages**.")
@@ -389,7 +389,7 @@ async def converter_callback_handler(event: SafeMessageWrapper):
             voice_note=is_voice,
             video_note=is_video_note,
             progress_callback=upload_progress,
-            reply_to=event.topic_id,
+            reply_to=getattr(event, "topic_id", None),
         )
         await event.delete()
 

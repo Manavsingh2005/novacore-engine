@@ -240,7 +240,7 @@ async def unzip_cmd(event: SafeMessageWrapper, query: str = ""):
                     event.chat_id,
                     file=file_p,
                     caption=f"📄 **{fname}**\n💾 `{format_bytes(fsize)}` • 🗜️ *From {raw_filename}*",
-                    reply_to=event.topic_id,
+                    reply_to=getattr(event, "topic_id", None),
                 )
             await status_msg.delete()
         else:
@@ -253,7 +253,7 @@ async def unzip_cmd(event: SafeMessageWrapper, query: str = ""):
                     event.chat_id,
                     file=file_p,
                     caption=f"📄 **{fname}**\n💾 `{format_bytes(fsize)}`",
-                    reply_to=event.topic_id,
+                    reply_to=getattr(event, "topic_id", None),
                 )
             await event.reply(
                 f"ℹ️ Sent first 15 of **{len(files)} files**. Total uncompressed size: `{format_bytes(total_size)}`."
@@ -362,7 +362,7 @@ async def zip_cmd(event: SafeMessageWrapper, query: str = ""):
                     f"💾 **Archive Size:** `{format_bytes(zip_size)}`\n"
                     f"{pwd_text}"
                 ),
-                reply_to=event.topic_id,
+                reply_to=getattr(event, "topic_id", None),
             )
             await status_msg.delete()
         except Exception as e:
@@ -451,7 +451,7 @@ async def zip_cmd(event: SafeMessageWrapper, query: str = ""):
                 f"💾 **Size:** `{format_bytes(orig_size)}` ➔ `{format_bytes(zip_size)}`\n"
                 f"{pwd_text}"
             ),
-            reply_to=event.topic_id,
+            reply_to=getattr(event, "topic_id", None),
         )
         await status_msg.delete()
     except Exception as e:

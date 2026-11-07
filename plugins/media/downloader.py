@@ -231,7 +231,7 @@ async def _download_and_send_song(
             voice_note=False,
             supports_streaming=True,
             progress_callback=upload_progress,
-            reply_to=event.topic_id,
+            reply_to=getattr(event, "topic_id", None),
         )
         await status_msg.delete()
     except Exception as e:
@@ -435,14 +435,12 @@ async def download_cmd(event: SafeMessageWrapper, query: str = ""):
 
     # If explicit quality was specified, download immediately
     if explicit_quality:
-        status_msg = await event.reply(f"🔎 **Processing media ({explicit_quality})...**")
-        return await _execute_dl(status_msg, target_url, quality=explicit_quality)
+        return await _execute_dl(event, target_url, quality=explicit_quality)
 
     # NON-YOUTUBE PLATFORMS (Instagram, TikTok, Twitter/X, Reddit, Pinterest, etc.):
     # Automatically download at highest available quality without showing quality menu!
     if not is_youtube_url(target_url):
-        status_msg = await event.reply(f"⚡ **Downloading media at highest quality...**\n`{target_url}`")
-        return await _execute_dl(status_msg, target_url, quality="best")
+        return await _execute_dl(event, target_url, quality="best")
 
     # YOUTUBE: Probe metadata and show interactive quality selection inline buttons!
     status_msg = await event.reply(f"🔎 **Inspecting YouTube media options...**\n`{target_url}`")
@@ -649,7 +647,7 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
             file=file_path,
             caption=f"🎬 **{title}**\n💾 `{format_bytes(file_size)}` • 🎯 `{quality}`",
             progress_callback=upload_progress,
-            reply_to=event.topic_id,
+            reply_to=getattr(event, "topic_id", None),
         )
         await status_msg.delete()
     except Exception as e:
