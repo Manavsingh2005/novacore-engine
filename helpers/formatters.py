@@ -29,6 +29,16 @@ def format_uptime(start_time: float) -> str:
     return " ".join(parts)
 
 
+def format_duration(seconds: int) -> str:
+    """Formats seconds into human-readable MM:SS or HH:MM:SS."""
+    seconds = max(0, int(seconds))
+    mins, secs = divmod(seconds, 60)
+    hrs, mins = divmod(mins, 60)
+    if hrs > 0:
+        return f"{hrs:02d}:{mins:02d}:{secs:02d}"
+    return f"{mins:02d}:{secs:02d}"
+
+
 def format_bytes(size_bytes: int) -> str:
     """Formats raw bytes into human-readable B, KB, MB, GB."""
     if size_bytes <= 0:
