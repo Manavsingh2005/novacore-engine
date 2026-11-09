@@ -11,6 +11,7 @@ Features:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -29,16 +30,54 @@ from telethon.tl.types import DocumentAttributeFilename
 
 from core.dispatcher import bot_cmd, bot_callback, client_raw_handler, SafeMessageWrapper
 from helpers.formatters import format_bytes
+from helpers.archiving import split_file_into_zips
 
 logger = logging.getLogger("novacore.plugin.utility.archiver")
 
-# Active batch zip sessions keyed by user_id
-# {user_id: {"name": str, "dir": str, "files": List[str], "created_at": float}}
+# Active batch zip sessions keyed by user_id (with disk sync for daemon restart resilience)
 ZIP_SESSIONS: Dict[int, Dict[str, Any]] = {}
+
+
+def get_zip_session(user_id: int) -> Optional[Dict[str, Any]]:
+    """Retrieves batch zip session from memory or persistent disk state."""
+    session_dir = f"/tmp/novacore_zipsess_{user_id}"
+    meta_path = os.path.join(session_dir, "session.json")
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["files"] = [f for f in data.get("files", []) if os.path.exists(f)]
+            ZIP_SESSIONS[user_id] = data
+            return data
+        except Exception:
+            pass
+    return ZIP_SESSIONS.get(user_id)
+
+
+def save_zip_session(user_id: int, session: Dict[str, Any]) -> None:
+    """Saves batch zip session in memory and writes metadata to disk."""
+    ZIP_SESSIONS[user_id] = session
+    session_dir = session.get("dir") or f"/tmp/novacore_zipsess_{user_id}"
+    os.makedirs(session_dir, exist_ok=True)
+    meta_path = os.path.join(session_dir, "session.json")
+    try:
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(session, f)
+    except Exception as e:
+        logger.warning("Failed to save zip session meta: %s", e)
+
+
+def clear_zip_session(user_id: int) -> None:
+    """Cleans up batch zip session directory and memory."""
+    session = get_zip_session(user_id)
+    if session and session.get("dir") and os.path.exists(session["dir"]):
+        shutil.rmtree(session["dir"], ignore_errors=True)
+    ZIP_SESSIONS.pop(user_id, None)
 
 ARCHIVE_EXTENSIONS = (
     ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz",
     ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".gz",
+    ".z01", ".z02", ".001",
 )
 
 
@@ -168,11 +207,24 @@ async def unzip_cmd(event: SafeMessageWrapper, query: str = ""):
                     err_str = str(zip_err).lower()
                     if "password" in err_str or "encrypted" in err_str or "bad password" in err_str:
                         return {"error": "PASSWORD_REQUIRED", "details": str(zip_err)}
-                    # Fallback to standard zipfile
-                    with zipfile.ZipFile(archive_path) as zf:
-                        if pwd_bytes:
-                            zf.setpassword(pwd_bytes)
-                        zf.extractall(extract_dir)
+                    # Fallback to standard zipfile, then system 7z (which unpacks multi-volume split zips)
+                    try:
+                        with zipfile.ZipFile(archive_path) as zf:
+                            if pwd_bytes:
+                                zf.setpassword(pwd_bytes)
+                            zf.extractall(extract_dir)
+                    except Exception:
+                        cmd = ["7z", "x", "-y"]
+                        if password:
+                            cmd.append(f"-p{password}")
+                        else:
+                            cmd.append("-p-")
+                        cmd.extend([archive_path, f"-o{extract_dir}"])
+                        res = subprocess.run(cmd, capture_output=True, text=True)
+                        if res.returncode != 0:
+                            if "wrong password" in (res.stderr + res.stdout).lower():
+                                return {"error": "PASSWORD_REQUIRED", "details": res.stderr}
+                            raise RuntimeError(res.stderr or res.stdout)
 
             # 2. 7Z (7-Zip)
             elif fn_lower.endswith(".7z"):
@@ -321,16 +373,17 @@ async def zip_cmd(event: SafeMessageWrapper, query: str = ""):
             archive_name += ".zip"
 
         # Cancel any previous session
-        if user_id in ZIP_SESSIONS:
-            shutil.rmtree(ZIP_SESSIONS[user_id]["dir"], ignore_errors=True)
+        clear_zip_session(user_id)
 
-        session_dir = tempfile.mkdtemp(prefix="novacore_zipsess_")
-        ZIP_SESSIONS[user_id] = {
+        session_dir = f"/tmp/novacore_zipsess_{user_id}"
+        os.makedirs(session_dir, exist_ok=True)
+        session = {
             "name": archive_name,
             "dir": session_dir,
             "files": [],
             "created_at": time.time(),
         }
+        save_zip_session(user_id, session)
 
         await event.reply(
             f"📦 **Batch Archive Session Started!**\n\n"
@@ -344,17 +397,17 @@ async def zip_cmd(event: SafeMessageWrapper, query: str = ""):
         return
 
     if subcmd == "cancel":
-        if user_id in ZIP_SESSIONS:
-            shutil.rmtree(ZIP_SESSIONS[user_id]["dir"], ignore_errors=True)
-            del ZIP_SESSIONS[user_id]
+        sess = get_zip_session(user_id)
+        if sess:
+            clear_zip_session(user_id)
             await event.reply("🚫 **Batch zip session cancelled and cleared.**")
         else:
             await event.reply("ℹ️ No active batch zip session found.")
         return
 
     if subcmd == "done":
-        session = ZIP_SESSIONS.get(user_id)
-        if not session or not session["files"]:
+        session = get_zip_session(user_id)
+        if not session or not session.get("files"):
             await event.reply("❌ **No active batch archive session or no files added yet.** Start with `/zip new`.")
             return
 
@@ -385,6 +438,57 @@ async def zip_cmd(event: SafeMessageWrapper, query: str = ""):
             zip_size = os.path.getsize(out_zip_path)
             pwd_text = f"🔑 **Password:** `{password}`\n" if password else "🔓 **Unencrypted**\n"
 
+            # Check if archive exceeds Telegram 2GB limit -> Split into parts!
+            if zip_size > 2000 * 1024 * 1024:
+                await status_msg.edit(
+                    f"📦 **Archive size ({format_bytes(zip_size)}) exceeds Telegram 2GB limit.**\n"
+                    f"✂️ **Splitting into multi-volume Zip parts (~1.85 GB each)...**"
+                )
+                parts = await loop.run_in_executor(None, split_file_into_zips, out_zip_path, 1900)
+                total_parts = len(parts)
+
+                for idx, part_path in enumerate(parts, 1):
+                    part_name = os.path.basename(part_path)
+                    part_size = os.path.getsize(part_path)
+                    last_part_up = [0.0]
+
+                    async def part_upload_progress(current, total):
+                        now = time.time()
+                        if now - last_part_up[0] >= 3.5:
+                            last_part_up[0] = now
+                            pct = int(current / total * 100) if total else 0
+                            await status_msg.edit(
+                                f"📤 **Uploading Part [{idx}/{total_parts}]:** `{pct}%` (`{format_bytes(current)}` / `{format_bytes(total)}`)..."
+                            )
+
+                    caption = (
+                        f"🗜️ **{session['name']} — Part {idx} of {total_parts}**\n"
+                        f"📁 **Files Packed:** `{len(session['files'])}`\n"
+                        f"📄 `{part_name}` • 💾 `{format_bytes(part_size)}`\n"
+                        f"{pwd_text}"
+                    )
+                    await event.client.send_file(
+                        event.chat_id,
+                        file=part_path,
+                        caption=caption,
+                        progress_callback=part_upload_progress,
+                        reply_to=getattr(event, "topic_id", None),
+                    )
+                    try:
+                        os.remove(part_path)
+                    except Exception:
+                        pass
+
+                await event.reply(
+                    f"✅ **All {total_parts} Zip parts uploaded successfully!**\n\n"
+                    f"💡 **How to Extract:**\n"
+                    f"1. Download all parts into the **same folder** on your PC or phone.\n"
+                    f"2. Open or extract the final file (`.zip`) using **7-Zip, WinRAR, or ZArchiver**.\n"
+                    f"3. All parts will automatically merge and extract your complete files!"
+                )
+                await status_msg.delete()
+                return
+
             await status_msg.edit(f"📤 **Uploading `{session['name']}` ({format_bytes(zip_size)})...**")
             await event.client.send_file(
                 event.chat_id,
@@ -402,16 +506,15 @@ async def zip_cmd(event: SafeMessageWrapper, query: str = ""):
             logger.exception("Batch zip creation failed: %s", e)
             await status_msg.edit(f"❌ **Zip Creation Failed:** `{e}`")
         finally:
-            shutil.rmtree(session["dir"], ignore_errors=True)
-            ZIP_SESSIONS.pop(user_id, None)
+            clear_zip_session(user_id)
         return
 
     # 2. Single-file zipping mode: reply /zip [password] [archive_name] to any media/file
     reply = await event.get_reply_message()
     if not reply or not reply.media:
         # Check if user has an active session
-        if user_id in ZIP_SESSIONS:
-            sess = ZIP_SESSIONS[user_id]
+        sess = get_zip_session(user_id)
+        if sess:
             await event.reply(
                 f"📦 **Active Batch Zip Session:** `{sess['name']}`\n"
                 f"• **Files Queued:** `{len(sess['files'])}`\n"
@@ -474,6 +577,56 @@ async def zip_cmd(event: SafeMessageWrapper, query: str = ""):
         zip_size = os.path.getsize(out_zip_path)
         pwd_text = f"🔑 **Password:** `{password}` (AES-256 Encrypted)\n" if password else "🔓 **Unencrypted**\n"
 
+        # Check if single zip exceeds Telegram 2GB limit -> Split into parts!
+        if zip_size > 2000 * 1024 * 1024:
+            await status_msg.edit(
+                f"📦 **Archive size ({format_bytes(zip_size)}) exceeds Telegram 2GB limit.**\n"
+                f"✂️ **Splitting into multi-volume Zip parts (~1.85 GB each)...**"
+            )
+            parts = await loop.run_in_executor(None, split_file_into_zips, out_zip_path, 1900)
+            total_parts = len(parts)
+
+            for idx, part_path in enumerate(parts, 1):
+                part_name = os.path.basename(part_path)
+                part_size = os.path.getsize(part_path)
+                last_part_up = [0.0]
+
+                async def part_upload_progress(current, total):
+                    now = time.time()
+                    if now - last_part_up[0] >= 3.5:
+                        last_part_up[0] = now
+                        pct = int(current / total * 100) if total else 0
+                        await status_msg.edit(
+                            f"📤 **Uploading Part [{idx}/{total_parts}]:** `{pct}%` (`{format_bytes(current)}` / `{format_bytes(total)}`)..."
+                        )
+
+                caption = (
+                    f"🗜️ **{zip_name} — Part {idx} of {total_parts}**\n"
+                    f"📄 `{part_name}` • 💾 `{format_bytes(part_size)}`\n"
+                    f"{pwd_text}"
+                )
+                await event.client.send_file(
+                    event.chat_id,
+                    file=part_path,
+                    caption=caption,
+                    progress_callback=part_upload_progress,
+                    reply_to=getattr(event, "topic_id", None),
+                )
+                try:
+                    os.remove(part_path)
+                except Exception:
+                    pass
+
+            await event.reply(
+                f"✅ **All {total_parts} Zip parts uploaded successfully!**\n\n"
+                f"💡 **How to Extract:**\n"
+                f"1. Download all parts into the **same folder** on your PC or phone.\n"
+                f"2. Open or extract the final file (`.zip`) using **7-Zip, WinRAR, or ZArchiver**.\n"
+                f"3. All parts will automatically merge and extract your complete file!"
+            )
+            await status_msg.delete()
+            return
+
         await status_msg.edit(f"📤 **Uploading `{zip_name}` ({format_bytes(zip_size)})...**")
         await event.client.send_file(
             event.chat_id,
@@ -510,7 +663,7 @@ async def batch_zip_file_receiver(event: SafeMessageWrapper):
     Automatically captures incoming media/files when the sender has an active /zip new session.
     """
     user_id = event.sender_id or event.chat_id
-    session = ZIP_SESSIONS.get(user_id)
+    session = get_zip_session(user_id)
     if not session:
         return
 
@@ -531,6 +684,7 @@ async def batch_zip_file_receiver(event: SafeMessageWrapper):
         if saved_path and os.path.exists(saved_path):
             session["files"].append(saved_path)
             session["last_activity"] = time.time()
+            save_zip_session(user_id, session)
             fsize = os.path.getsize(saved_path)
             await event.reply(
                 f"📥 **Added to `{session['name']}`:** `{os.path.basename(saved_path)}` (`{format_bytes(fsize)}`)\n"

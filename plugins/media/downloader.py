@@ -30,7 +30,8 @@ from telethon import Button, events
 from telethon.tl.types import DocumentAttributeAudio, DocumentAttributeVideo
 
 from core.dispatcher import bot_cmd, bot_callback, client_raw_handler, SafeMessageWrapper
-from helpers.formatters import format_bytes
+from helpers.formatters import format_bytes, format_duration
+from helpers.archiving import split_file_into_zips
 
 logger = logging.getLogger("novacore.plugin.media.downloader")
 
@@ -161,24 +162,36 @@ def extract_pinterest_media(url: str) -> Optional[Dict[str, Any]]:
                 except Exception:
                     pass
 
-        # 3. If OpenGraph has an image URL, upgrade to originals resolution
+        # 3. If OpenGraph has an image URL, check that it is not the default Pinterest brand asset
         if og_img_match:
             img_url = og_img_match.group(1).strip()
-            orig_candidate = re.sub(r'/(?:736x|\d+x)/', '/originals/', img_url)
-            try:
-                check_req = urllib.request.Request(orig_candidate, method='HEAD', headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(check_req, timeout=5) as chk:
-                    if chk.status == 200:
-                        return {"type": "image", "url": orig_candidate, "title": title}
-            except Exception:
-                pass
-            return {"type": "image", "url": img_url, "title": title}
+            if "d53b014d86a6b6761bf649a0ed813c2b" not in img_url and not img_url.endswith("/pin-badge.png"):
+                orig_candidate = re.sub(r'/(?:736x|\d+x)/', '/originals/', img_url)
+                try:
+                    check_req = urllib.request.Request(orig_candidate, method='HEAD', headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(check_req, timeout=5) as chk:
+                        if chk.status == 200:
+                            return {"type": "image", "url": orig_candidate, "title": title}
+                except Exception:
+                    pass
+                return {"type": "image", "url": img_url, "title": title}
 
-        # 4. Fallback: Search for any originals URL containing pin_id or in HTML
-        if pin_id:
-            pin_img = re.search(r'https://i\.pinimg\.com/originals/[^\s"\'<>]+\.(?:jpg|jpeg|png|webp)', html)
-            if pin_img:
-                return {"type": "image", "url": pin_img.group(0), "title": title}
+        # 4. Fallback: Search for high-resolution images on pinimg, excluding the logo sprite
+        candidates = re.findall(r'https://i\.pinimg\.com/(?:736x|originals)/[a-f0-9/]+\.(?:jpg|jpeg|png|webp)', html)
+        filtered_imgs = [c for c in candidates if "d53b014d86a6b6761bf649a0ed813c2b" not in c and "pin-badge" not in c]
+        if filtered_imgs:
+            best_img = filtered_imgs[0]
+            # Try upgrading to /originals/
+            if "/736x/" in best_img:
+                orig_cand = best_img.replace("/736x/", "/originals/")
+                try:
+                    check_req = urllib.request.Request(orig_cand, method='HEAD', headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(check_req, timeout=5) as chk:
+                        if chk.status == 200:
+                            return {"type": "image", "url": orig_cand, "title": title}
+                except Exception:
+                    pass
+            return {"type": "image", "url": best_img, "title": title}
 
     except Exception as pe:
         logger.warning("Pinterest custom extractor failed: %s", pe)
@@ -794,10 +807,51 @@ async def _execute_dl(event: SafeMessageWrapper, target_url: str, quality: str =
         max_limit = 2000 * 1024 * 1024
         if file_size > max_limit:
             await status_msg.edit(
-                f"⚠️ **File size exceeds Telegram 2GB limit:**\n"
-                f"• Size: `{format_bytes(file_size)}`\n"
-                f"• Limit: `{format_bytes(max_limit)}`"
+                f"📦 **File size ({format_bytes(file_size)}) exceeds Telegram 2GB limit.**\n"
+                f"✂️ **Splitting into multi-volume Zip parts (~1.85 GB each)...**"
             )
+            parts = await loop.run_in_executor(None, split_file_into_zips, file_path, 1900)
+            total_parts = len(parts)
+
+            for idx, part_path in enumerate(parts, 1):
+                part_name = os.path.basename(part_path)
+                part_size = os.path.getsize(part_path)
+                last_part_up = [0.0]
+
+                async def part_upload_progress(current, total):
+                    now = time.time()
+                    if now - last_part_up[0] >= 3.5:
+                        last_part_up[0] = now
+                        pct = int(current / total * 100) if total else 0
+                        await status_msg.edit(
+                            f"📤 **Uploading Part [{idx}/{total_parts}]:** `{pct}%` (`{format_bytes(current)}` / `{format_bytes(total)}`)..."
+                        )
+
+                caption = (
+                    f"📦 **{title} — Part {idx} of {total_parts}**\n"
+                    f"📄 `{part_name}`\n"
+                    f"💾 `{format_bytes(part_size)}` • 🎯 Multi-Volume Zip"
+                )
+                await event.client.send_file(
+                    event.chat_id,
+                    file=part_path,
+                    caption=caption,
+                    progress_callback=part_upload_progress,
+                    reply_to=getattr(event, "topic_id", None),
+                )
+                try:
+                    os.remove(part_path)
+                except Exception:
+                    pass
+
+            await event.reply(
+                f"✅ **All {total_parts} Zip parts uploaded successfully!**\n\n"
+                f"💡 **How to Extract:**\n"
+                f"1. Download all parts into the **same folder** on your PC or phone.\n"
+                f"2. Open or extract the final file (`.zip`) using **7-Zip, WinRAR, or ZArchiver**.\n"
+                f"3. All parts will automatically merge and extract your complete file!"
+            )
+            await status_msg.delete()
             return
 
         await status_msg.edit(f"📤 **Uploading to Telegram:** `{format_bytes(file_size)}`...")
